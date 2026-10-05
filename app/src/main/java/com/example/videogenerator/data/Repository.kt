@@ -8,6 +8,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.example.videogenerator.model.AppSettings
 import com.example.videogenerator.model.Instruction
 import com.example.videogenerator.model.Job
+import com.example.videogenerator.model.SavedCharacter
 import com.example.videogenerator.model.TagStyle
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -26,6 +27,7 @@ class Repository(private val context: Context) {
         val TAG_STYLE = stringPreferencesKey("tag_style")
         val INSTRUCTIONS = stringPreferencesKey("instructions")
         val JOBS = stringPreferencesKey("jobs")
+        val SAVED_CHARACTERS = stringPreferencesKey("saved_characters")
     }
 
     val settings: Flow<AppSettings> = context.dataStore.data.map { p ->
@@ -37,6 +39,16 @@ class Repository(private val context: Context) {
     }
 
     val instructions: Flow<List<Instruction>> = context.dataStore.data.map { decodeList(it, Keys.INSTRUCTIONS, Instruction.serializer()) }
+
+    val savedCharacters: Flow<List<SavedCharacter>> =
+        context.dataStore.data.map { decodeList(it, Keys.SAVED_CHARACTERS, SavedCharacter.serializer()) }
+
+    suspend fun updateSavedCharacters(transform: (List<SavedCharacter>) -> List<SavedCharacter>) {
+        context.dataStore.edit {
+            val current = decodeList(it, Keys.SAVED_CHARACTERS, SavedCharacter.serializer())
+            it[Keys.SAVED_CHARACTERS] = json.encodeToString(ListSerializer(SavedCharacter.serializer()), transform(current))
+        }
+    }
 
     val jobs: Flow<List<Job>> = context.dataStore.data.map { decodeList(it, Keys.JOBS, Job.serializer()) }
 

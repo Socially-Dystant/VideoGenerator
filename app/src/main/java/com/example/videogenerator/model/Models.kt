@@ -73,6 +73,8 @@ data class Character(
     val otherClothing: String = "",
     /** Tattoos, scars, piercings, makeup, glasses… anything that must not change. */
     val features: String = "",
+    /** Set when this character came from, or was saved to, the character library. */
+    val savedId: Long? = null,
 ) {
     val tag: String get() = name.lowercase()
     val hasClothing: Boolean get() = listOf(top, bottom, footwear, accessories, otherClothing).any { it.isNotBlank() }
@@ -81,6 +83,22 @@ data class Character(
         const val START_FRAME_IMAGE_ID = -1L
     }
 }
+
+/** A character kept in the library, with its own copies of the images. */
+@Serializable
+data class SavedCharacter(
+    val id: Long,
+    val name: String,
+    /** Absolute paths of the image copies in app storage. */
+    val imagePaths: List<String>,
+    val top: String = "",
+    val bottom: String = "",
+    val footwear: String = "",
+    val accessories: String = "",
+    val otherClothing: String = "",
+    val features: String = "",
+    val savedAt: Long = 0,
+)
 
 @Serializable
 data class Instruction(

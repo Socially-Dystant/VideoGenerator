@@ -8,7 +8,7 @@ const {
   NSFW_DIRECTIVE,
 } = require('./safety');
 const { MAX_REFERENCE_IMAGES, buildVideoRequest, validateSettings, summariseTask } = require('./ofox');
-const { SpicyClient, isSpicyId } = require('./spicy');
+const { SpicyClient, isSpicyId, TERMINAL_STATES, ID_PREFIX } = require('./spicy');
 
 const config = {
   port: Number(process.env.PORT) || 3000,
@@ -193,6 +193,67 @@ app.post(
     }
   },
 );
+
+/**
+ * Erases the given jobs. SpicyAPI jobs are purged (video and prompt destroyed,
+ * finished jobs only, no refund). Ofox can't delete finished videos, so Ofox
+ * jobs are cancelled if still running and otherwise only reported back for the
+ * app to drop from its History.
+ */
+async function eraseOne(id) {
+  if (isSpicyId(id)) {
+    if (!spicy) return { id, erased: false, message: 'SPICY_API_KEY missing on the server.' };
+    try {
+      await spicy.purge(id);
+      console.log(`Purged ${id}`);
+      return { id, erased: true, message: 'Deleted from SpicyAPI.' };
+    } catch (err) {
+      return { id, erased: false, message: `SpicyAPI: ${err.message}` };
+    }
+  }
+  try {
+    const result = await ofox(`/v1/videos/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    if (result.ok) return { id, erased: true, message: 'Cancelled on Ofox.' };
+    // 400 cancel_failed = already finished; Ofox keeps finished videos.
+    return { id, erased: false, localOnly: true, message: 'Ofox does not allow deleting finished videos.' };
+  } catch (err) {
+    return { id, erased: false, message: `Ofox: ${err.message}` };
+  }
+}
+
+app.post('/api/videos/erase', requireAppToken, async (req, res) => {
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids.filter((id) => typeof id === 'string').slice(0, 200) : [];
+  if (ids.length === 0) return res.status(400).json({ error: 'ids is required.' });
+  const results = [];
+  for (const id of ids) results.push(await eraseOne(id)); // sequential to stay inside rate limits
+  res.json({ results });
+});
+
+// Purges every finished SpicyAPI job for this model from the last 92 days,
+// including ones the app never recorded. Running jobs are skipped.
+app.post('/api/videos/erase-all-spicy', requireAppToken, async (_req, res) => {
+  if (!spicy) return res.status(503).json({ error: 'SPICY_API_KEY missing on the server.' });
+  let jobs;
+  try {
+    jobs = await spicy.listAll();
+  } catch (err) {
+    return res.status(err.status || 502).json({ error: `SpicyAPI: ${err.message}` });
+  }
+  const purged = [];
+  const skipped = [];
+  const failed = [];
+  for (const job of jobs) {
+    const id = ID_PREFIX + job.taskId;
+    if (job.contentState === 'purged') continue;
+    if (!TERMINAL_STATES.has(job.state)) {
+      skipped.push(id);
+      continue;
+    }
+    const result = await eraseOne(id);
+    (result.erased ? purged : failed).push(id);
+  }
+  res.json({ purged, skipped, failed });
+});
 
 // The latest jobs from each provider, newest first. Registered before /:id so
 // "recent" isn't treated as a job id.

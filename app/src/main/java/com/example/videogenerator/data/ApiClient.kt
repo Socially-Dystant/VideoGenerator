@@ -62,6 +62,28 @@ data class GenerateRequest(
     val seed: Long? = null,
 )
 
+@Serializable
+data class EraseResult(
+    val id: String,
+    val erased: Boolean = false,
+    /** The provider keeps the video; only the app's History entry can go. */
+    val localOnly: Boolean = false,
+    val message: String? = null,
+)
+
+@Serializable
+data class EraseResponse(val results: List<EraseResult> = emptyList())
+
+@Serializable
+data class EraseAllSpicyResponse(
+    val purged: List<String> = emptyList(),
+    val skipped: List<String> = emptyList(),
+    val failed: List<String> = emptyList(),
+)
+
+@Serializable
+private data class EraseRequest(val ids: List<String>)
+
 class ApiException(message: String) : IOException(message)
 
 /** Talks to our Render server, which holds the Ofox key. */
@@ -108,6 +130,31 @@ class ApiClient(private val context: Context) {
         }
     }
 
+    suspend fun erase(baseUrl: String, token: String, ids: List<String>): EraseResponse = withContext(Dispatchers.IO) {
+        val body = json.encodeToString(EraseRequest.serializer(), EraseRequest(ids)).toRequestBody(JSON)
+        decode(Request.Builder().url("$baseUrl/api/videos/erase").post(body), token, EraseResponse.serializer())
+    }
+
+    suspend fun eraseAllSpicy(baseUrl: String, token: String): EraseAllSpicyResponse = withContext(Dispatchers.IO) {
+        decode(
+            Request.Builder().url("$baseUrl/api/videos/erase-all-spicy").post(ByteArray(0).toRequestBody(JSON)),
+            token,
+            EraseAllSpicyResponse.serializer(),
+        )
+    }
+
+    private fun <T> decode(builder: Request.Builder, token: String, serializer: kotlinx.serialization.KSerializer<T>): T {
+        val request = builder.header("Authorization", "Bearer $token").build()
+        http.newCall(request).execute().use { res ->
+            val text = res.body?.string().orEmpty()
+            if (!res.isSuccessful) {
+                val msg = runCatching { json.decodeFromString(ErrorResponse.serializer(), text).error }.getOrNull()
+                throw ApiException(msg ?: "Server returned HTTP ${res.code}")
+            }
+            return json.decodeFromString(serializer, text)
+        }
+    }
+
     suspend fun cancel(baseUrl: String, token: String, id: String) = withContext(Dispatchers.IO) {
         execute(Request.Builder().url("$baseUrl/api/videos/$id").delete(), token)
     }
@@ -145,5 +192,6 @@ class ApiClient(private val context: Context) {
     private companion object {
         const val MAX_SIDE = 2048
         val JPEG = "image/jpeg".toMediaType()
+        val JSON = "application/json".toMediaType()
     }
 }

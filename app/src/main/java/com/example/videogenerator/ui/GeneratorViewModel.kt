@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.videogenerator.data.ApiClient
+import com.example.videogenerator.data.CharacterLibrary
 import com.example.videogenerator.data.GenerateRequest
 import com.example.videogenerator.data.Repository
 import com.example.videogenerator.data.TaskResponse
@@ -15,11 +16,13 @@ import com.example.videogenerator.model.Instruction
 import com.example.videogenerator.model.Job
 import com.example.videogenerator.model.ReferenceImage
 import com.example.videogenerator.model.Resolution
+import com.example.videogenerator.model.SavedCharacter
 import com.example.videogenerator.model.Shot
 import com.example.videogenerator.prompt.BuiltPrompt
 import com.example.videogenerator.prompt.PromptBuilder
 import com.example.videogenerator.prompt.PromptInput
 import com.example.videogenerator.prompt.Safety
+import java.io.File
 import kotlinx.coroutines.Job as CoroutineJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -60,6 +63,7 @@ data class CreateState(
 class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
     private val repo = Repository(app)
     private val api = ApiClient(app)
+    private val library = CharacterLibrary(app)
     private var nextId = System.currentTimeMillis()
     private var pollJob: CoroutineJob? = null
 
@@ -69,6 +73,12 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
     val settings: StateFlow<AppSettings> = repo.settings.stateIn(viewModelScope, SharingStarted.Eagerly, AppSettings())
     val instructions: StateFlow<List<Instruction>> = repo.instructions.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
     val jobs: StateFlow<List<Job>> = repo.jobs.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+    val savedCharacters: StateFlow<List<SavedCharacter>> =
+        repo.savedCharacters.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /** Feedback for library actions, shown in the Characters section. */
+    private val _libraryMessage = MutableStateFlow<String?>(null)
+    val libraryMessage: StateFlow<String?> = _libraryMessage.asStateFlow()
 
     val prompt: StateFlow<BuiltPrompt> = combine(_state, instructions, settings) { s, ins, cfg ->
         PromptBuilder.build(
@@ -135,7 +145,7 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
     fun newCharacter() = Character(id = nextId++)
 
     /** Returns an error message, or null once the character is saved. */
-    fun saveCharacter(character: Character): String? {
+    fun saveCharacter(character: Character, toLibrary: Boolean = false): String? {
         val s = _state.value
         val name = character.name.trim()
         val taken = s.references.map { it.tag.lowercase() } + PromptBuilder.START_FRAME_TAG +
@@ -157,7 +167,105 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
                 offerCharacter = false,
             )
         }
+        if (toLibrary) saveToLibrary(saved)
         return null
+    }
+
+    // --- Character library -----------------------------------------------------------
+
+    fun dismissLibraryMessage() {
+        _libraryMessage.value = null
+    }
+
+    /** Saves (or updates) [character] in the library with copies of its images and all descriptions. */
+    fun saveToLibrary(character: Character) = viewModelScope.launch {
+        val s = _state.value
+        val uris = buildList {
+            if (Character.START_FRAME_IMAGE_ID in character.imageIds) s.startFrame?.let { add(Uri.parse(it)) }
+            s.references.filter { it.id in character.imageIds }.forEach { add(Uri.parse(it.uri)) }
+        }
+        if (uris.isEmpty()) {
+            _libraryMessage.value = "${character.name} has no images to save."
+            return@launch
+        }
+        val savedId = character.savedId ?: nextId++
+        try {
+            val paths = library.storeImages(savedId, uris)
+            val saved = SavedCharacter(
+                id = savedId,
+                name = character.name,
+                imagePaths = paths,
+                top = character.top,
+                bottom = character.bottom,
+                footwear = character.footwear,
+                accessories = character.accessories,
+                otherClothing = character.otherClothing,
+                features = character.features,
+                savedAt = System.currentTimeMillis(),
+            )
+            repo.updateSavedCharacters { list ->
+                if (list.any { it.id == savedId }) list.map { if (it.id == savedId) saved else it } else list + saved
+            }
+            _state.update { st ->
+                st.copy(characters = st.characters.map { if (it.id == character.id) it.copy(savedId = savedId) else it })
+            }
+            _libraryMessage.value = "Saved ${character.name} (${paths.size} image${if (paths.size == 1) "" else "s"}) to your library."
+        } catch (e: Exception) {
+            _libraryMessage.value = "Couldn't save ${character.name}: ${e.message}"
+        }
+    }
+
+    /** Adds a saved character to this video: its images become references and the character is recreated. */
+    fun loadSavedCharacter(saved: SavedCharacter): String? {
+        val s = _state.value
+        if (s.characters.any { it.savedId == saved.id }) return "${saved.name} is already in this video."
+        val files = saved.imagePaths.map(::File).filter { it.exists() }
+        if (files.isEmpty()) return "${saved.name}'s images are missing. Delete and save the character again."
+        val free = s.maxReferences - s.references.size
+        if (files.size > free) {
+            return "${saved.name} needs ${files.size} reference slots but only $free are free. Remove some reference images first."
+        }
+        val tag = saved.name.lowercase()
+        val taken = (s.references.map { it.tag.lowercase() } + PromptBuilder.START_FRAME_TAG + s.characters.map { it.tag }).toMutableSet()
+        if (tag in taken) return "Something called @${saved.name} is already in this video. Rename or remove it first."
+        taken += tag
+        val refs = files.map { file ->
+            var n = 1
+            while ("$tag$n" in taken) n++
+            taken += "$tag$n"
+            ReferenceImage(id = nextId++, uri = Uri.fromFile(file).toString(), tag = "$tag$n")
+        }
+        val character = Character(
+            id = nextId++,
+            name = saved.name,
+            imageIds = refs.map { it.id },
+            top = saved.top,
+            bottom = saved.bottom,
+            footwear = saved.footwear,
+            accessories = saved.accessories,
+            otherClothing = saved.otherClothing,
+            features = saved.features,
+            savedId = saved.id,
+        )
+        edit { st ->
+            st.copy(
+                references = st.references + refs,
+                characters = st.characters + character,
+                characterOffered = true,
+                offerCharacter = false,
+            )
+        }
+        _libraryMessage.value = "Added ${saved.name} with ${refs.size} image${if (refs.size == 1) "" else "s"}."
+        return null
+    }
+
+    fun deleteSavedCharacter(saved: SavedCharacter) = viewModelScope.launch {
+        library.delete(saved.id)
+        repo.updateSavedCharacters { list -> list.filterNot { it.id == saved.id } }
+        _state.update { st ->
+            st.copy(characters = st.characters.map { if (it.savedId == saved.id) it.copy(savedId = null) else it })
+        }
+        _libraryMessage.value = "Deleted ${saved.name} from your library."
     }
 
     fun removeCharacter(id: Long) = edit { s -> s.copy(characters = s.characters.filterNot { it.id == id }) }
@@ -332,6 +440,68 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
                 _historyMessage.value = e.message ?: "Refresh failed."
             } finally {
                 _refreshing.value = false
+            }
+        }
+    }
+
+    private val _erasing = MutableStateFlow(false)
+    val erasing: StateFlow<Boolean> = _erasing.asStateFlow()
+
+    /**
+     * Erases [toErase] from the providers where possible: SpicyAPI purges finished
+     * videos; Ofox can only cancel unfinished ones, so finished Ofox videos are just
+     * removed from History. Anything a provider refuses stays in History.
+     */
+    fun eraseJobs(toErase: List<Job>) = runErase {
+        val cfg = settings.value
+        val results = api.erase(cfg.serverUrl, cfg.appToken, toErase.map { it.id }).results
+        val removable = results.filter { it.erased || it.localOnly }.map { it.id }.toSet()
+        repo.updateJobs { list -> list.filterNot { it.id in removable } }
+        val failures = results.filterNot { it.erased || it.localOnly }
+        val spicyDeleted = results.count { it.erased && it.id.startsWith("spicy.") }
+        val ofoxRemoved = results.count { it.id in removable && !it.id.startsWith("spicy.") }
+        buildString {
+            if (spicyDeleted > 0) append("Deleted $spicyDeleted from SpicyAPI. ")
+            if (ofoxRemoved > 0) append("Removed $ofoxRemoved Ofox video${if (ofoxRemoved == 1) "" else "s"} from History (Ofox keeps finished videos). ")
+            failures.forEach { append("\n${it.message ?: "Couldn't erase ${it.id}."}") }
+        }.trim()
+    }
+
+    /**
+     * Purges every finished SpicyAPI video for this model (including ones not in
+     * History) and erases every Ofox job in History.
+     */
+    fun eraseAll() = runErase {
+        val cfg = settings.value
+        val spicy = api.eraseAllSpicy(cfg.serverUrl, cfg.appToken)
+        val ofoxIds = repo.jobs.first().filterNot { it.isSpicy }.map { it.id }
+        val ofoxResults = if (ofoxIds.isEmpty()) emptyList() else api.erase(cfg.serverUrl, cfg.appToken, ofoxIds).results
+        val keep = (spicy.skipped + spicy.failed).toSet() +
+            ofoxResults.filterNot { it.erased || it.localOnly }.map { it.id }
+        repo.updateJobs { list -> list.filter { it.id in keep || (it.isSpicy && !it.isTerminal) } }
+        buildString {
+            append("Deleted ${spicy.purged.size} video${if (spicy.purged.size == 1) "" else "s"} from SpicyAPI")
+            append(" and removed ${ofoxResults.count { it.erased || it.localOnly }} Ofox entr${if (ofoxResults.size == 1) "y" else "ies"} from History.")
+            if (spicy.skipped.isNotEmpty()) append("\n${spicy.skipped.size} SpicyAPI job(s) still running were skipped; erase them once they finish.")
+            if (spicy.failed.isNotEmpty()) append("\n${spicy.failed.size} SpicyAPI job(s) could not be deleted.")
+        }
+    }
+
+    private fun runErase(block: suspend () -> String) {
+        if (_erasing.value) return
+        val cfg = settings.value
+        if (cfg.serverUrl.isBlank() || cfg.appToken.isBlank()) {
+            _historyMessage.value = "Set the server URL and app token in Settings first."
+            return
+        }
+        _erasing.value = true
+        viewModelScope.launch {
+            _historyMessage.value = try {
+                block()
+            } catch (e: Exception) {
+                e.message ?: "Erase failed."
+            } finally {
+                _erasing.value = false
             }
         }
     }

@@ -34,6 +34,8 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Warning
@@ -100,6 +102,9 @@ fun CreateScreen(vm: GeneratorViewModel, modifier: Modifier = Modifier) {
     val imagesOnly = PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
     val tagNames = prompt.tagMap.keys.toList()
     var editingCharacter by remember { mutableStateOf<Character?>(null) }
+    var showLibrary by remember { mutableStateOf(false) }
+    val savedCharacters by vm.savedCharacters.collectAsState()
+    val libraryMessage by vm.libraryMessage.collectAsState()
 
     val characterImages = buildList {
         state.startFrame?.let { add(CharacterImageOption(Character.START_FRAME_IMAGE_ID, it, "@start")) }
@@ -134,6 +139,15 @@ fun CreateScreen(vm: GeneratorViewModel, modifier: Modifier = Modifier) {
             images = characterImages,
             onSave = vm::saveCharacter,
             onDismiss = { editingCharacter = null },
+        )
+    }
+
+    if (showLibrary) {
+        SavedCharactersDialog(
+            saved = savedCharacters,
+            onLoad = vm::loadSavedCharacter,
+            onDelete = { vm.deleteSavedCharacter(it) },
+            onDismiss = { showLibrary = false },
         )
     }
 
@@ -227,19 +241,41 @@ fun CreateScreen(vm: GeneratorViewModel, modifier: Modifier = Modifier) {
                                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                             )
                         }
+                        IconButton(onClick = { vm.saveToLibrary(character) }) {
+                            if (character.savedId != null) {
+                                Icon(Icons.Default.Favorite, "Update saved character", tint = MaterialTheme.colorScheme.primary)
+                            } else {
+                                Icon(Icons.Default.FavoriteBorder, "Save character to library")
+                            }
+                        }
                         IconButton(onClick = { editingCharacter = character }) { Icon(Icons.Default.Edit, "Edit character") }
                         IconButton(onClick = { vm.removeCharacter(character.id) }) { Icon(Icons.Default.Delete, "Delete character") }
                     }
                 }
             }
-            OutlinedButton(
-                onClick = { editingCharacter = vm.newCharacter() },
-                enabled = characterImages.isNotEmpty(),
-            ) {
-                Icon(Icons.Default.Person, null); Spacer(Modifier.width(8.dp)); Text("Create character")
+            libraryMessage?.let { msg ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(msg, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f))
+                    TextButton(onClick = vm::dismissLibraryMessage) { Text("OK") }
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = { editingCharacter = vm.newCharacter() },
+                    enabled = characterImages.isNotEmpty(),
+                ) {
+                    Icon(Icons.Default.Person, null); Spacer(Modifier.width(6.dp)); Text("Create", maxLines = 1)
+                }
+                OutlinedButton(onClick = { showLibrary = true }) {
+                    Icon(Icons.Default.Favorite, null); Spacer(Modifier.width(6.dp))
+                    Text("Saved (${savedCharacters.size})", maxLines = 1)
+                }
             }
             if (characterImages.isEmpty()) {
-                Text("Add a start frame or reference images first.", style = MaterialTheme.typography.bodySmall)
+                Text(
+                    "Add a start frame or reference images to create a character, or add one from Saved.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
         }
 

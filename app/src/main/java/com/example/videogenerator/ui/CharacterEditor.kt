@@ -20,6 +20,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
@@ -53,11 +54,14 @@ fun CharacterEditorDialog(
     initial: Character,
     isNew: Boolean,
     images: List<CharacterImageOption>,
-    onSave: (Character) -> String?,
+    /** Second argument: also save to the character library. */
+    onSave: (Character, Boolean) -> String?,
     onDismiss: () -> Unit,
 ) {
     var c by remember(initial.id) { mutableStateOf(initial) }
     var error by remember { mutableStateOf<String?>(null) }
+    // Characters that came from the library stay in sync with it by default.
+    var saveToLibrary by remember(initial.id) { mutableStateOf(initial.savedId != null) }
 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
@@ -150,6 +154,20 @@ fun CharacterEditorDialog(
                     }
                 }
 
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { saveToLibrary = !saveToLibrary }
+                        .padding(horizontal = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Checkbox(saveToLibrary, onCheckedChange = { saveToLibrary = it })
+                    Text(
+                        if (initial.savedId != null) "Update the saved copy in my character library"
+                        else "Save to my character library (keeps the images and descriptions)",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
                 error?.let {
                     Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 20.dp))
                 }
@@ -161,7 +179,7 @@ fun CharacterEditorDialog(
                     TextButton(onClick = onDismiss) { Text("Cancel") }
                     Spacer(Modifier.width(8.dp))
                     Button(onClick = {
-                        error = onSave(c)
+                        error = onSave(c, saveToLibrary)
                         if (error == null) onDismiss()
                     }) { Text(if (isNew) "Create character" else "Save") }
                 }

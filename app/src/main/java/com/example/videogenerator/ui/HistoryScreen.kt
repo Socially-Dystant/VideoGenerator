@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -54,6 +55,9 @@ import kotlinx.coroutines.launch
 fun HistoryScreen(vm: GeneratorViewModel, modifier: Modifier = Modifier) {
     val jobs by vm.jobs.collectAsState()
     val refreshing by vm.refreshing.collectAsState()
+    val erasing by vm.erasing.collectAsState()
+    var confirmEraseAll by remember { mutableStateOf(false) }
+    var confirmErase by remember { mutableStateOf<Job?>(null) }
     val message by vm.historyMessage.collectAsState()
     val context = LocalContext.current
 
@@ -74,6 +78,18 @@ fun HistoryScreen(vm: GeneratorViewModel, modifier: Modifier = Modifier) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (erasing) {
+                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Erasing…", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                } else {
+                    Spacer(Modifier.weight(1f))
+                }
+                TextButton(onClick = { confirmEraseAll = true }, enabled = !erasing) {
+                    Text("Erase all videos…", color = MaterialTheme.colorScheme.error)
+                }
+            }
         }
         message?.let { msg ->
             item {
@@ -88,13 +104,66 @@ fun HistoryScreen(vm: GeneratorViewModel, modifier: Modifier = Modifier) {
         if (jobs.isEmpty()) {
             item { Text("Nothing yet. Generated videos show up here.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
-        items(jobs, key = { it.id }) { job -> JobCard(job, vm, context) }
+        items(jobs, key = { it.id }) { job -> JobCard(job, vm, context, erasing, onErase = { confirmErase = job }) }
     }
+
+    confirmErase?.let { job ->
+        AlertDialog(
+            onDismissRequest = { confirmErase = null },
+            title = { Text("Erase this video?") },
+            text = { Text(eraseExplanation(job)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.eraseJobs(listOf(job))
+                    confirmErase = null
+                }) { Text("Erase", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { confirmErase = null }) { Text("Cancel") } },
+        )
+    }
+
+    if (confirmEraseAll) {
+        val ofoxCount = jobs.count { !it.isSpicy }
+        AlertDialog(
+            onDismissRequest = { confirmEraseAll = false },
+            title = { Text("Erase all videos?") },
+            text = {
+                Text(
+                    "• SpicyAPI: every finished Wan 3.0 Prime video from the last 92 days is permanently deleted " +
+                        "(video and prompt), including ones not shown here. Videos still generating are skipped. " +
+                        "This can't be undone and isn't refunded.\n\n" +
+                        "• Ofox: $ofoxCount video${if (ofoxCount == 1) "" else "s"} in History. Unfinished ones are cancelled; " +
+                        "finished ones are only removed from this app because Ofox doesn't allow deleting them.\n\n" +
+                        "Save any videos you want to keep first.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.eraseAll()
+                    confirmEraseAll = false
+                }) { Text("Erase everything", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { confirmEraseAll = false }) { Text("Cancel") } },
+        )
+    }
+}
+
+private fun eraseExplanation(job: Job): String = when {
+    job.isSpicy && !job.isTerminal ->
+        "This SpicyAPI video is still generating and can't be deleted yet. Try again once it finishes."
+    job.isSpicy ->
+        "The video and its prompt are permanently deleted from SpicyAPI and removed from History. " +
+            "This can't be undone and the cost isn't refunded."
+    !job.isTerminal ->
+        "The job is cancelled on Ofox (if Ofox still allows it) and removed from History."
+    else ->
+        "Ofox doesn't allow deleting finished videos, so this only removes it from History in this app. " +
+            "The video stays in your Ofox account until Ofox expires it."
 }
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun JobCard(job: Job, vm: GeneratorViewModel, context: Context) {
+private fun JobCard(job: Job, vm: GeneratorViewModel, context: Context, erasing: Boolean, onErase: () -> Unit) {
     var playUrl by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     // Fetch a current link first; SpicyAPI links expire after ~20 minutes.
@@ -160,7 +229,7 @@ private fun JobCard(job: Job, vm: GeneratorViewModel, context: Context) {
                     }) { Text("Open") }
                 }
                 if (!job.isTerminal && !job.isSpicy) TextButton(onClick = { vm.cancel(job) }) { Text("Cancel") }
-                else TextButton(onClick = { vm.removeJob(job.id) }) { Text("Remove") }
+                TextButton(onClick = onErase, enabled = !erasing) { Text("Erase", color = MaterialTheme.colorScheme.error) }
             }
         }
     }

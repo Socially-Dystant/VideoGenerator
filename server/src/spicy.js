@@ -37,7 +37,7 @@ class SpicyClient {
       err.status = res.ok ? 502 : res.status;
       throw err;
     }
-    return body.data;
+    return body.data ?? body;
   }
 
   // Ticket → presigned PUT → commit; returns the spicy:// URI for task input.
@@ -123,6 +123,7 @@ class SpicyClient {
       billedSeconds: null,
       createdAt: data.createdAt ?? null,
       completedAt: data.completedAt ?? null,
+      purged: data.contentState === 'purged',
     };
   }
 
@@ -134,9 +135,10 @@ class SpicyClient {
     const page = await this.call('/jobs?limit=100');
     const items = (page.items ?? page ?? [])
       .filter((item) => !item.model || item.model.startsWith(this.modelBase))
+      .filter((item) => item.contentState !== 'purged')
       .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
       .slice(0, limit);
-    return Promise.all(
+    const tasks = await Promise.all(
       items.map((item) =>
         this.getTask(ID_PREFIX + item.taskId).catch(() => ({
           id: ID_PREFIX + item.taskId,
@@ -152,9 +154,39 @@ class SpicyClient {
         })),
       ),
     );
+    return tasks.filter((t) => !t.purged);
   }
 }
 
+SpicyClient.prototype.purge = async function purge(id) {
+  return this.call('/jobs/purge', {
+    method: 'POST',
+    body: JSON.stringify({ taskId: id.startsWith(ID_PREFIX) ? id.slice(ID_PREFIX.length) : id }),
+  });
+};
+
+/**
+ * Every job for this model family in the list endpoint's widest window
+ * (92 days), following pagination. Used by "erase all".
+ */
+SpicyClient.prototype.listAll = async function listAll() {
+  const day = (offset) => new Date(Date.now() + offset * 86400000).toISOString().slice(0, 10);
+  const jobs = [];
+  let cursor = null;
+  for (let pageNo = 0; pageNo < 50; pageNo++) {
+    const query = new URLSearchParams({ limit: '100', from: day(-91), to: day(1) });
+    if (cursor) query.set('cursor', cursor);
+    const page = await this.call(`/jobs?${query}`);
+    const items = page.items ?? [];
+    jobs.push(...items.filter((item) => !item.model || item.model.startsWith(this.modelBase)));
+    cursor = page.nextCursor ?? page.cursor ?? null;
+    if (!cursor || items.length === 0) break;
+  }
+  return jobs;
+};
+
+const TERMINAL_STATES = new Set(['succeeded', 'failed', 'canceled', 'cancelled', 'expired']);
+
 const isSpicyId = (id) => id.startsWith(ID_PREFIX);
 
-module.exports = { SpicyClient, isSpicyId };
+module.exports = { SpicyClient, isSpicyId, TERMINAL_STATES, ID_PREFIX };
