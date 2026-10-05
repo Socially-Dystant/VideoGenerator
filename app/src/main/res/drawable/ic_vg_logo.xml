@@ -1,10 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- VG mark, centred inside the 66dp adaptive-icon safe zone. -->
+<!-- In-app logo: the launcher mark on its gradient tile, cropped to the safe zone. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="40dp"
+    android:height="40dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+    <group android:scaleX="1.45" android:scaleY="1.45" android:pivotX="54" android:pivotY="54">
+        <path android:pathData="M0,0h108v108h-108z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:type="linear"
+                    android:startX="18"
+                    android:startY="18"
+                    android:endX="90"
+                    android:endY="90">
+                    <item android:offset="0" android:color="#FF4C1D95" />
+                    <item android:offset="0.55" android:color="#FFC026D3" />
+                    <item android:offset="1" android:color="#FFFB7185" />
+                </gradient>
+            </aapt:attr>
+        </path>
     <!-- V: one rounded stroke. -->
     <path
         android:pathData="M27,41 L38,67 L49,41"
@@ -25,4 +41,5 @@
         android:strokeWidth="2"
         android:strokeColor="#FFFDE047"
         android:strokeLineJoin="round" />
+    </group>
 </vector>

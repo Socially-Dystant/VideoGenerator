@@ -10,6 +10,8 @@ import android.widget.Toast
 import android.widget.VideoView
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
@@ -59,6 +61,7 @@ fun HistoryScreen(vm: GeneratorViewModel, modifier: Modifier = Modifier) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun JobCard(job: Job, vm: GeneratorViewModel, context: Context) {
     var playUrl by remember { mutableStateOf<String?>(null) }
@@ -103,7 +106,8 @@ private fun JobCard(job: Job, vm: GeneratorViewModel, context: Context) {
                     modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
                 )
             }
-            Row {
+            // Wraps onto a second line instead of pushing buttons off-screen.
+            FlowRow {
                 TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "Less" else "Full prompt") }
                 if (job.videoUrl != null) {
                     TextButton(onClick = { if (playUrl != null) playUrl = null else withUrl { playUrl = it } }) {

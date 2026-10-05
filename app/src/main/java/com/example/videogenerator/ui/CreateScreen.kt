@@ -335,7 +335,11 @@ fun CreateScreen(vm: GeneratorViewModel, modifier: Modifier = Modifier) {
                 CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                 Spacer(Modifier.width(12.dp)); Text("Uploading…")
             } else {
-                Text("Generate · ${state.resolution.apiValue} · ${state.duration}s · ≈ ${formatUsd(state.estimatedCostUsd)}")
+                Text(
+                    "Generate · ${state.resolution.apiValue} · ${state.duration}s · ≈ ${formatUsd(state.estimatedCostUsd)}",
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                )
             }
         }
         Text(
@@ -369,7 +373,7 @@ private fun ShotCard(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.weight(1f)) {
                     OutlinedButton(onClick = { typeMenu = true }, modifier = Modifier.fillMaxWidth()) {
-                        Text("Framing: ${shot.type.label}")
+                        Text("Framing: ${shot.type.label}", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                     }
                     DropdownMenu(expanded = typeMenu, onDismissRequest = { typeMenu = false }) {
                         ShotType.entries.forEach { type ->
