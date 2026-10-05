@@ -3,10 +3,11 @@
 Android app (Jetpack Compose) + a small Node.js server on Render that turns a scene description, shot list, reference images and an optional start frame into a **Wan 3.0 Prime** video through the [Ofox video API](https://ofox.ai/docs/api/videos).
 
 ```
-Android app  ──(HTTPS, APP_TOKEN)──▶  Render server  ──(OFOX_API_KEY)──▶  api.ofox.ai/v1/videos
+Android app  ──(HTTPS, APP_TOKEN)──▶  Render server ──(OFOX_API_KEY)──▶  api.ofox.ai/v1/videos          (NSFW off)
+                                                    └─(SPICY_API_KEY)─▶  api.spicyapi.ai/api/v1/jobs     (NSFW on)
 ```
 
-The Ofox key only lives on the server, so it can't be pulled out of the APK.
+API keys only live on the server, so they can't be pulled out of the APK.
 
 ## Features
 
@@ -34,7 +35,8 @@ Ofox treats `frame_images` (first frame) and `input_references` (reference-to-vi
 - When on, the user must confirm everyone depicted is an adult and that real people shown have consented.
 - Any text that references minors (e.g. "teen", "schoolgirl", "16 years old") blocks an NSFW request, both in the app and again on the server.
 - Every uploaded image in an NSFW request is checked by a vision model (`AGE_CHECK_MODEL`) through Ofox. If it sees a possible minor, is unsure, or the check fails, the request is blocked.
-- Ofox and Alibaba Cloud apply their own moderation, which may reject explicit content no matter what the toggle says.
+- NSFW requests go to [SpicyAPI](https://docs.spicyapi.ai/docs) using Wan 3.0 Prime (`alibaba/wan-3.0-prime/reference-to-video`, or `/image-to-video` / `/text-to-video` when there are no reference images). Images are uploaded through SpicyAPI's upload flow, and job ids are prefixed `spicy.` so status checks route back to it.
+- SpicyAPI video links expire after about 20 minutes. The History tab fetches a fresh link before playing, saving or opening, but save anything you want to keep. SpicyAPI jobs can't be cancelled.
 
 ## Deploying the server to Render
 
@@ -47,6 +49,8 @@ Ofox treats `frame_images` (first frame) and `input_references` (reference-to-vi
 | --- | --- | --- |
 | `OFOX_API_KEY` | — (required) | Your Ofox key |
 | `APP_TOKEN` | — (required) | Shared secret the app sends as a Bearer token |
+| `SPICY_API_KEY` | — (needed for NSFW) | SpicyAPI key; NSFW requests are rejected without it |
+| `SPICY_MODEL_BASE` | `alibaba/wan-3.0-prime` | SpicyAPI model prefix; `/reference-to-video` etc. is appended |
 | `OFOX_VIDEO_MODEL` | `alibaba/wan-3.0-prime` | Video model |
 | `AGE_CHECK_MODEL` | `openai/gpt-4o-mini` | Vision model used for the NSFW age check |
 | `IMAGE_DELIVERY` | `url` | `url` serves uploads from short-lived links on this server; `data_uri` sends them inline |

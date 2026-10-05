@@ -218,9 +218,9 @@ fun CreateScreen(vm: GeneratorViewModel, modifier: Modifier = Modifier) {
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
                     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
-                            "Anything involving minors is always blocked — in text and in images. NSFW requests " +
-                                "with images are age-checked by the server. Ofox / the model provider may still " +
-                                "refuse content under their own policies.",
+                            "NSFW requests are sent to SpicyAPI (Wan 3.0 Prime). Anything involving minors is " +
+                                "always blocked — in text and in images; uploaded images are age-checked by the server " +
+                                "first. SpicyAPI video links expire after ~20 minutes, so save videos you want to keep.",
                             style = MaterialTheme.typography.bodySmall,
                         )
                         Row(
@@ -258,7 +258,7 @@ fun CreateScreen(vm: GeneratorViewModel, modifier: Modifier = Modifier) {
             }
         }
         Text(
-            "Cost estimate uses Ofox's listed Wan 3.0 Prime rates; the final charge is shown in History.",
+            "Cost estimate uses the listed Wan 3.0 Prime rates (Ofox, or SpicyAPI for NSFW); the final charge is shown in History.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

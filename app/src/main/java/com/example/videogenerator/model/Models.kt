@@ -2,10 +2,11 @@ package com.example.videogenerator.model
 
 import kotlinx.serialization.Serializable
 
-enum class Resolution(val apiValue: String, val usdPerSecond: Double) {
-    P480("480p", 0.064),
-    P720("720p", 0.13),
-    P1080("1080p", 0.26),
+/** Listed per-second rates: Ofox for SFW requests, SpicyAPI for NSFW ones. */
+enum class Resolution(val apiValue: String, val usdPerSecond: Double, val nsfwUsdPerSecond: Double) {
+    P480("480p", 0.064, 0.0612),
+    P720("720p", 0.13, 0.126),
+    P1080("1080p", 0.26, 0.252),
 }
 
 val DURATIONS = listOf(5, 10, 15, 20, 25, 30)
@@ -77,6 +78,9 @@ data class Job(
     val costUsd: Double? = null,
 ) {
     val isTerminal: Boolean get() = status in TERMINAL_STATUSES
+
+    /** NSFW jobs run on SpicyAPI: they can't be cancelled and their video links expire after ~20 minutes. */
+    val isSpicy: Boolean get() = id.startsWith("spicy.")
 }
 
 val TERMINAL_STATUSES = setOf("completed", "failed", "cancelled", "expired")

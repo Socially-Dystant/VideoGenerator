@@ -8,6 +8,7 @@ const {
   NSFW_DIRECTIVE,
 } = require('./safety');
 const { MAX_REFERENCE_IMAGES, buildVideoRequest, validateSettings, summariseTask } = require('./ofox');
+const { SpicyClient, isSpicyId } = require('./spicy');
 
 const config = {
   port: Number(process.env.PORT) || 3000,
@@ -16,6 +17,10 @@ const config = {
   videoModel: process.env.OFOX_VIDEO_MODEL || 'alibaba/wan-3.0-prime',
   ageCheckModel: process.env.AGE_CHECK_MODEL || 'openai/gpt-4o-mini',
   appToken: process.env.APP_TOKEN,
+  // NSFW requests go to SpicyAPI instead of Ofox.
+  spicyApiKey: process.env.SPICY_API_KEY,
+  spicyBaseUrl: (process.env.SPICY_BASE_URL || 'https://api.spicyapi.ai').replace(/\/$/, ''),
+  spicyModelBase: process.env.SPICY_MODEL_BASE || 'alibaba/wan-3.0-prime',
   // Render sets RENDER_EXTERNAL_URL automatically. Without a public URL the
   // images are sent inline as data URIs instead.
   publicBaseUrl: (process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/$/, ''),
@@ -30,6 +35,11 @@ if (!config.appToken) {
   console.error('APP_TOKEN is not set. Refusing to start an open proxy to your Ofox account.');
   process.exit(1);
 }
+
+const spicy = config.spicyApiKey
+  ? new SpicyClient({ apiKey: config.spicyApiKey, baseUrl: config.spicyBaseUrl, modelBase: config.spicyModelBase })
+  : null;
+if (!spicy) console.warn('SPICY_API_KEY is not set; NSFW requests will be rejected.');
 
 // Uploaded images are served back to Ofox from short-lived, unguessable URLs.
 const IMAGE_TTL_MS = 3 * 60 * 60 * 1000;
@@ -123,6 +133,7 @@ app.post(
 
     const nsfw = payload.nsfw === true;
     if (nsfw) {
+      if (!spicy) return res.status(503).json({ error: 'NSFW generation is not configured on the server (SPICY_API_KEY missing).' });
       if (payload.adultsConfirmed !== true) {
         return res.status(422).json({
           error: 'NSFW mode requires confirming that everyone depicted is an adult (18+) who consented.',
@@ -143,6 +154,18 @@ app.post(
       });
       if (!verdict.ok) return res.status(422).json({ error: verdict.reason });
       if (!prompt.includes(NSFW_DIRECTIVE)) prompt += `\n\n${NSFW_DIRECTIVE}`;
+
+      try {
+        const task = spicy.buildTask({
+          settings,
+          prompt,
+          startFrameUri: startFrame ? await spicy.upload(startFrame) : null,
+          referenceUris: await Promise.all(references.map((f) => spicy.upload(f))),
+        });
+        return res.status(202).json(await spicy.createTask(task));
+      } catch (err) {
+        return res.status(err.status || 502).json({ error: `SpicyAPI: ${err.message}` });
+      }
     } else if (!prompt.includes(SFW_DIRECTIVE)) {
       prompt += `\n\n${SFW_DIRECTIVE}`;
     }
@@ -168,6 +191,14 @@ app.post(
 );
 
 app.get('/api/videos/:id', requireAppToken, async (req, res) => {
+  if (isSpicyId(req.params.id)) {
+    if (!spicy) return res.status(503).json({ error: 'SPICY_API_KEY missing on the server.' });
+    try {
+      return res.json(await spicy.getTask(req.params.id));
+    } catch (err) {
+      return res.status(err.status || 502).json({ error: `SpicyAPI: ${err.message}` });
+    }
+  }
   try {
     const result = await ofox(`/v1/videos/${encodeURIComponent(req.params.id)}`);
     if (!result.ok) {
@@ -180,6 +211,9 @@ app.get('/api/videos/:id', requireAppToken, async (req, res) => {
 });
 
 app.delete('/api/videos/:id', requireAppToken, async (req, res) => {
+  if (isSpicyId(req.params.id)) {
+    return res.status(501).json({ error: 'SpicyAPI jobs cannot be cancelled.' });
+  }
   try {
     const result = await ofox(`/v1/videos/${encodeURIComponent(req.params.id)}`, { method: 'DELETE' });
     res.status(result.ok ? 200 : result.status).json(result.ok ? { cancelled: true } : { error: ofoxError(result.body, 'Cancel failed') });

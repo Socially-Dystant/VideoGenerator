@@ -27,6 +27,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -37,6 +38,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.example.videogenerator.model.Job
 import java.text.DateFormat
 import java.util.Date
+import kotlinx.coroutines.launch
 
 @Composable
 fun HistoryScreen(vm: GeneratorViewModel, modifier: Modifier = Modifier) {
@@ -59,12 +61,18 @@ fun HistoryScreen(vm: GeneratorViewModel, modifier: Modifier = Modifier) {
 
 @Composable
 private fun JobCard(job: Job, vm: GeneratorViewModel, context: Context) {
-    var playing by remember { mutableStateOf(false) }
+    var playUrl by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    // Fetch a current link first; SpicyAPI links expire after ~20 minutes.
+    fun withUrl(action: (String) -> Unit) = scope.launch {
+        vm.freshVideoUrl(job)?.let(action)
+            ?: Toast.makeText(context, "Couldn't get the video link. Try Refresh.", Toast.LENGTH_SHORT).show()
+    }
     var expanded by remember { mutableStateOf(false) }
     OutlinedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row {
-                AssistChip(onClick = {}, label = { Text(job.status) })
+                AssistChip(onClick = {}, label = { Text(job.status + if (job.isSpicy) " · NSFW" else "") })
                 Text(
                     "  ${job.resolution} · ${job.duration}s" + (job.costUsd?.let { " · ${formatUsd(it)}" } ?: ""),
                     style = MaterialTheme.typography.bodySmall,
@@ -83,12 +91,12 @@ private fun JobCard(job: Job, vm: GeneratorViewModel, context: Context) {
                 maxLines = if (expanded) Int.MAX_VALUE else 3,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (playing && job.videoUrl != null) {
+            playUrl?.let { url ->
                 AndroidView(
                     factory = { ctx ->
                         VideoView(ctx).apply {
                             setMediaController(MediaController(ctx).also { it.setAnchorView(this) })
-                            setVideoURI(Uri.parse(job.videoUrl))
+                            setVideoURI(Uri.parse(url))
                             setOnPreparedListener { start() }
                         }
                     },
@@ -98,25 +106,27 @@ private fun JobCard(job: Job, vm: GeneratorViewModel, context: Context) {
             Row {
                 TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "Less" else "Full prompt") }
                 if (job.videoUrl != null) {
-                    TextButton(onClick = { playing = !playing }) { Text(if (playing) "Hide" else "Play") }
-                    TextButton(onClick = { download(context, job) }) { Text("Save") }
+                    TextButton(onClick = { if (playUrl != null) playUrl = null else withUrl { playUrl = it } }) {
+                        Text(if (playUrl != null) "Hide" else "Play")
+                    }
+                    TextButton(onClick = { withUrl { download(context, job, it) } }) { Text("Save") }
                     TextButton(onClick = {
-                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(job.videoUrl)))
+                        withUrl { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(it))) }
                     }) { Text("Open") }
                 }
-                if (!job.isTerminal) TextButton(onClick = { vm.cancel(job) }) { Text("Cancel") }
+                if (!job.isTerminal && !job.isSpicy) TextButton(onClick = { vm.cancel(job) }) { Text("Cancel") }
                 else TextButton(onClick = { vm.removeJob(job.id) }) { Text("Remove") }
             }
         }
     }
 }
 
-private fun download(context: Context, job: Job) {
-    val request = DownloadManager.Request(Uri.parse(job.videoUrl))
+private fun download(context: Context, job: Job, url: String) {
+    val request = DownloadManager.Request(Uri.parse(url))
         .setTitle("Generated video")
         .setMimeType("video/mp4")
         .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-        .setDestinationInExternalPublicDir(Environment.DIRECTORY_MOVIES, "videogen-${job.id.take(8)}.mp4")
+        .setDestinationInExternalPublicDir(Environment.DIRECTORY_MOVIES, "videogen-${job.id.takeLast(8)}.mp4")
     context.getSystemService(DownloadManager::class.java).enqueue(request)
     Toast.makeText(context, "Saving to Movies…", Toast.LENGTH_SHORT).show()
 }

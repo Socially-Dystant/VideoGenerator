@@ -14,6 +14,8 @@ services:
         sync: false
       - key: APP_TOKEN
         generateValue: true
+      - key: SPICY_API_KEY
+        sync: false
       - key: OFOX_VIDEO_MODEL
         value: alibaba/wan-3.0-prime
       - key: AGE_CHECK_MODEL

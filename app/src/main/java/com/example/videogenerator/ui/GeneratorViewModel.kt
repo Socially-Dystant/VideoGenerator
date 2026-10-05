@@ -49,7 +49,7 @@ data class CreateState(
 ) {
     /** Ofox allows 9 input references; a start frame sent alongside them takes one slot. */
     val maxReferences: Int get() = if (startFrame != null) 8 else 9
-    val estimatedCostUsd: Double get() = resolution.usdPerSecond * duration
+    val estimatedCostUsd: Double get() = (if (nsfw) resolution.nsfwUsdPerSecond else resolution.usdPerSecond) * duration
 }
 
 class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
@@ -215,6 +215,14 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
         runCatching { api.cancel(cfg.serverUrl, cfg.appToken, job.id) }
             .onSuccess { applyTask(job.id, TaskResponse(id = job.id, status = "cancelled")) }
             .onFailure { e -> _state.update { it.copy(message = e.message) } }
+    }
+
+    /** Re-polls the job so the link is current (SpicyAPI links expire after ~20 minutes). */
+    suspend fun freshVideoUrl(job: Job): String? {
+        val cfg = settings.value
+        return runCatching { api.status(cfg.serverUrl, cfg.appToken, job.id) }
+            .onSuccess { applyTask(job.id, it) }
+            .getOrNull()?.videoUrl ?: job.videoUrl.takeUnless { job.isSpicy }
     }
 
     fun removeJob(id: String) = viewModelScope.launch { repo.updateJobs { list -> list.filterNot { it.id == id } } }
