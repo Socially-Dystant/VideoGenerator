@@ -69,9 +69,10 @@ class ApiClient(private val context: Context) {
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
     private val http = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
-        // Uploads plus the server-side age check can take a while.
-        .readTimeout(120, TimeUnit.SECONDS)
-        .writeTimeout(120, TimeUnit.SECONDS)
+        // NSFW submits run the age check and upload every image to SpicyAPI before the
+        // job exists; a short timeout made the app drop jobs that were actually created.
+        .readTimeout(300, TimeUnit.SECONDS)
+        .writeTimeout(300, TimeUnit.SECONDS)
         .build()
 
     suspend fun submit(

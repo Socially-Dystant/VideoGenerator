@@ -162,7 +162,9 @@ app.post(
           startFrameUri: startFrame ? await spicy.upload(startFrame) : null,
           referenceUris: await Promise.all(references.map((f) => spicy.upload(f))),
         });
-        return res.status(202).json(await spicy.createTask(task));
+        const created = await spicy.createTask(task);
+        console.log(`Created ${created.id} (${task.model}, ${settings.resolution}, ${settings.duration}s)`);
+        return res.status(202).json(created);
       } catch (err) {
         return res.status(err.status || 502).json({ error: `SpicyAPI: ${err.message}` });
       }
@@ -183,7 +185,9 @@ app.post(
       if (!result.ok) {
         return res.status(result.status).json({ error: ofoxError(result.body, `Ofox returned HTTP ${result.status}`) });
       }
-      res.status(202).json(summariseTask(result.body));
+      const created = summariseTask(result.body);
+      console.log(`Created ofox ${created.id} (${settings.resolution}, ${settings.duration}s)`);
+      res.status(202).json(created);
     } catch (err) {
       res.status(502).json({ error: `Could not reach Ofox: ${err.message}` });
     }
