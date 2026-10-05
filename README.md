@@ -39,7 +39,7 @@ Ofox treats `frame_images` (first frame) and `input_references` (reference-to-vi
 ## Deploying the server to Render
 
 1. Push this repo to GitHub.
-2. In Render: **New → Blueprint**, pick the repo. `render.yaml` creates the `videogenerator-server` web service from `server/`.
+2. In Render: **New → Blueprint**, pick the repo. `render.yaml` creates the `videogenerator-server` web service, built from the root `Dockerfile` (which packages only `server/`). A service created by hand works too: use the Docker runtime, default Dockerfile path and health check path `/health`.
 3. When prompted, set `OFOX_API_KEY`. Render generates `APP_TOKEN` for you; copy it from the service's **Environment** page.
 4. Once it's live, open `https://<your-service>.onrender.com/health`. It should return `{"ok":true}`.
 

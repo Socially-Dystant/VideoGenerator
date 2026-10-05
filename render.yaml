@@ -1,11 +1,13 @@
 services:
   - type: web
     name: videogenerator-server
-    runtime: node
-    rootDir: server
+    runtime: docker
+    dockerfilePath: ./Dockerfile
     plan: starter
-    buildCommand: npm ci
-    startCommand: npm start
+    buildFilter:
+      paths:
+        - server/**
+        - Dockerfile
     healthCheckPath: /health
     envVars:
       - key: OFOX_API_KEY
