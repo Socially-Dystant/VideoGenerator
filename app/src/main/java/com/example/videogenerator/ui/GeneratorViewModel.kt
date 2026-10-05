@@ -386,11 +386,17 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Re-polls the job so the link is current (SpicyAPI links expire after ~20 minutes). */
-    suspend fun freshVideoUrl(job: Job): String? {
+    suspend fun freshVideoUrl(job: Job): Result<String> {
         val cfg = settings.value
-        return runCatching { api.status(cfg.serverUrl, cfg.appToken, job.id) }
+        val task = runCatching { api.status(cfg.serverUrl, cfg.appToken, job.id) }
             .onSuccess { applyTask(job.id, it) }
-            .getOrNull()?.videoUrl ?: job.videoUrl.takeUnless { job.isSpicy }
+        task.getOrNull()?.videoUrl?.let { return Result.success(it) }
+        // Ofox links don't expire quickly, so the stored one is a reasonable fallback.
+        if (!job.isSpicy) job.videoUrl?.let { return Result.success(it) }
+        val reason = task.getOrNull()?.videoNote
+            ?: task.exceptionOrNull()?.message?.let { "Couldn't reach the server: $it" }
+            ?: "No video link yet (status: ${task.getOrNull()?.status ?: job.status})."
+        return Result.failure(IllegalStateException(reason))
     }
 
     fun removeJob(id: String) = viewModelScope.launch { repo.updateJobs { list -> list.filterNot { it.id == id } } }
@@ -459,7 +465,7 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
         _extractingFrame.value = job.id
         viewModelScope.launch {
             try {
-                val url = freshVideoUrl(job) ?: throw IllegalStateException("Couldn't get the video link. Try Refresh.")
+                val url = freshVideoUrl(job).getOrThrow()
                 val frame = frameExtractor.lastFrame(url, name = job.id.takeLast(12).replace(Regex("[^A-Za-z0-9_-]"), "_"))
                 setStartFrame(Uri.fromFile(frame))
                 _state.update { it.copy(message = "Start frame set from the last frame of that video. Describe what happens next.") }

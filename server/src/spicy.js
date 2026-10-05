@@ -111,13 +111,34 @@ class SpicyClient {
   // Asset URLs expire after ~20 minutes, so the app asks for a fresh one before playing or saving.
   async getTask(id) {
     const data = await this.call(`/jobs/recordInfo?taskId=${encodeURIComponent(id.slice(ID_PREFIX.length))}`);
-    const video = data.output?.assets?.find((a) => a.mime?.startsWith('video/')) ?? data.output?.assets?.[0];
+    const assets = data.output?.assets ?? [];
+    const video = assets.find((a) => a.mime?.startsWith('video/')) ?? assets[0];
+    const videoUrl = video?.url || data.output?.video_url || data.output?.url || null;
+    const status = STATE_TO_STATUS[data.state] || data.state;
+
+    // SpicyAPI omits the link while the video is still being copied into its
+    // storage, and after it expires or is deleted. Say which, instead of nothing.
+    let videoNote = null;
+    if (status === 'completed' && !videoUrl) {
+      if (data.contentState === 'purged') videoNote = 'This video was deleted from SpicyAPI.';
+      else if (data.contentState === 'expired' || video?.unavailable) {
+        videoNote = 'This video has expired on SpicyAPI (videos are kept for up to ~14 days).';
+      } else if (video?.pending || assets.length === 0) {
+        videoNote = 'SpicyAPI is still preparing the video file. Try again in a minute.';
+      } else videoNote = 'SpicyAPI returned no link for this video.';
+      console.log(
+        `No video link for ${id}: contentState=${data.contentState} assets=${JSON.stringify(
+          assets.map(({ mime, pending, unavailable, url }) => ({ mime, pending, unavailable, hasUrl: Boolean(url) })),
+        )} outputKeys=${Object.keys(data.output ?? {}).join(',')}`,
+      );
+    }
     return {
       id,
       provider: 'spicy',
       model: data.model ?? null,
-      status: STATE_TO_STATUS[data.state] || data.state,
-      videoUrl: video?.url ?? null,
+      status,
+      videoUrl,
+      videoNote,
       error: data.errorMessage ?? null,
       costUsd: data.cost != null ? Number(data.cost) : null,
       billedSeconds: null,

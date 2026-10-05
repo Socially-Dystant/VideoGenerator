@@ -182,8 +182,9 @@ private fun JobCard(
     val scope = rememberCoroutineScope()
     // Fetch a current link first; SpicyAPI links expire after ~20 minutes.
     fun withUrl(action: (String) -> Unit) = scope.launch {
-        vm.freshVideoUrl(job)?.let(action)
-            ?: Toast.makeText(context, "Couldn't get the video link. Try Refresh.", Toast.LENGTH_SHORT).show()
+        vm.freshVideoUrl(job)
+            .onSuccess(action)
+            .onFailure { Toast.makeText(context, it.message, Toast.LENGTH_LONG).show() }
     }
     var expanded by remember { mutableStateOf(false) }
     OutlinedCard(Modifier.fillMaxWidth()) {

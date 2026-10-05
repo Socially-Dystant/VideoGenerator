@@ -24,6 +24,8 @@ data class TaskResponse(
     val id: String = "",
     val status: String = "",
     val videoUrl: String? = null,
+    /** Why [videoUrl] is missing on a finished job (still preparing, expired, deleted). */
+    val videoNote: String? = null,
     val error: String? = null,
     val costUsd: Double? = null,
     val billedSeconds: Double? = null,
