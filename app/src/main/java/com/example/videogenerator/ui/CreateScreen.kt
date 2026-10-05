@@ -245,14 +245,14 @@ fun CreateScreen(vm: GeneratorViewModel, modifier: Modifier = Modifier) {
 
         // --- Scene ---------------------------------------------------------------------------
         Section("Scene description", "Setting, characters, mood, lighting, style.") {
-            OutlinedTextField(
+            TaggedTextField(
                 value = state.scene,
                 onValueChange = { v -> vm.edit { it.copy(scene = v) } },
-                placeholder = { Text("e.g. A rainy neon-lit street at night. @ref1 waits under an umbrella…") },
+                tags = tagNames,
+                placeholder = "e.g. A rainy neon-lit street at night. @ref1 waits under an umbrella…",
                 minLines = 4,
                 modifier = Modifier.fillMaxWidth(),
             )
-            TagChips(tagNames) { tag -> vm.edit { it.copy(scene = appendTag(it.scene, tag)) } }
         }
 
         // --- Shots ------------------------------------------------------------------------------
@@ -391,14 +391,14 @@ private fun ShotCard(
                     modifier = Modifier.width(88.dp),
                 )
             }
-            OutlinedTextField(
+            TaggedTextField(
                 value = shot.description,
                 onValueChange = { v -> onChange { it.copy(description = v) } },
-                placeholder = { Text("Action, camera movement, dialogue…") },
+                tags = tagNames,
+                placeholder = "Action, camera movement, dialogue…",
                 minLines = 2,
                 modifier = Modifier.fillMaxWidth(),
             )
-            TagChips(tagNames) { tag -> onChange { it.copy(description = appendTag(it.description, tag)) } }
         }
     }
 }
@@ -460,9 +460,6 @@ private fun highlightTags(text: String, labels: Set<String>, color: androidx.com
     }
 }
 
-private fun appendTag(text: String, tag: String): String =
-    if (text.isEmpty() || text.endsWith(" ") || text.endsWith("\n")) "$text$tag " else "$text $tag "
-
 fun formatUsd(amount: Double): String = String.format(Locale.US, "$%.2f", amount)
 
 @Composable
@@ -499,7 +496,7 @@ private fun <T> ChipRow(options: List<T>, selected: T, label: (T) -> String, onS
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun TagChips(tags: List<String>, onInsert: (String) -> Unit) {
+internal fun TagChips(tags: List<String>, onInsert: (String) -> Unit) {
     if (tags.isEmpty()) return
     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         tags.forEach { tag ->
