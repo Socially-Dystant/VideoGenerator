@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: videogenerator-server
+    runtime: node
+    rootDir: server
+    plan: starter
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: OFOX_API_KEY
+        sync: false
+      - key: APP_TOKEN
+        generateValue: true
+      - key: OFOX_VIDEO_MODEL
+        value: alibaba/wan-3.0-prime
+      - key: AGE_CHECK_MODEL
+        value: openai/gpt-4o-mini
+      - key: IMAGE_DELIVERY
+        value: url

@@ -1,0 +1,198 @@
+const crypto = require('node:crypto');
+const express = require('express');
+const multer = require('multer');
+const {
+  findMinorReference,
+  checkImagesForMinors,
+  SFW_DIRECTIVE,
+  NSFW_DIRECTIVE,
+} = require('./safety');
+const { MAX_REFERENCE_IMAGES, buildVideoRequest, validateSettings, summariseTask } = require('./ofox');
+
+const config = {
+  port: Number(process.env.PORT) || 3000,
+  ofoxApiKey: process.env.OFOX_API_KEY,
+  ofoxBaseUrl: (process.env.OFOX_BASE_URL || 'https://api.ofox.ai').replace(/\/$/, ''),
+  videoModel: process.env.OFOX_VIDEO_MODEL || 'alibaba/wan-3.0-prime',
+  ageCheckModel: process.env.AGE_CHECK_MODEL || 'openai/gpt-4o-mini',
+  appToken: process.env.APP_TOKEN,
+  // Render sets RENDER_EXTERNAL_URL automatically. Without a public URL the
+  // images are sent inline as data URIs instead.
+  publicBaseUrl: (process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/$/, ''),
+  imageDelivery: process.env.IMAGE_DELIVERY || 'url',
+};
+
+if (!config.ofoxApiKey) {
+  console.error('OFOX_API_KEY is not set.');
+  process.exit(1);
+}
+if (!config.appToken) {
+  console.error('APP_TOKEN is not set. Refusing to start an open proxy to your Ofox account.');
+  process.exit(1);
+}
+
+// Uploaded images are served back to Ofox from short-lived, unguessable URLs.
+const IMAGE_TTL_MS = 3 * 60 * 60 * 1000;
+const images = new Map();
+setInterval(() => {
+  const now = Date.now();
+  for (const [token, img] of images) if (img.expiresAt < now) images.delete(token);
+}, 10 * 60 * 1000).unref();
+
+function publishImage(file) {
+  if (config.imageDelivery === 'data_uri' || !config.publicBaseUrl) {
+    return `data:${file.mimetype};base64,${file.buffer.toString('base64')}`;
+  }
+  const token = crypto.randomBytes(24).toString('hex');
+  images.set(token, { buffer: file.buffer, mimetype: file.mimetype, expiresAt: Date.now() + IMAGE_TTL_MS });
+  return `${config.publicBaseUrl}/files/${token}`;
+}
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024, files: MAX_REFERENCE_IMAGES + 1 },
+  fileFilter: (_req, file, cb) => {
+    cb(null, ['image/jpeg', 'image/png', 'image/webp', 'image/bmp'].includes(file.mimetype));
+  },
+});
+
+const app = express();
+app.disable('x-powered-by');
+app.use(express.json({ limit: '1mb' }));
+
+app.get('/health', (_req, res) => res.json({ ok: true }));
+
+app.get('/files/:token', (req, res) => {
+  const img = images.get(req.params.token);
+  if (!img || img.expiresAt < Date.now()) return res.sendStatus(404);
+  res.type(img.mimetype).send(img.buffer);
+});
+
+function requireAppToken(req, res, next) {
+  const header = req.get('authorization') || '';
+  const given = Buffer.from(header.replace(/^Bearer\s+/i, ''));
+  const expected = Buffer.from(config.appToken);
+  if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) {
+    return res.status(401).json({ error: 'Invalid app token.' });
+  }
+  next();
+}
+
+async function ofox(path, init = {}) {
+  const res = await fetch(`${config.ofoxBaseUrl}${path}`, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${config.ofoxApiKey}`,
+      'Content-Type': 'application/json',
+      ...init.headers,
+    },
+  });
+  const body = await res.json().catch(() => ({}));
+  return { status: res.status, ok: res.ok, body };
+}
+
+function ofoxError(body, fallback) {
+  return body?.error?.message || body?.error || body?.message || fallback;
+}
+
+app.post(
+  '/api/videos',
+  requireAppToken,
+  upload.fields([
+    { name: 'start_frame', maxCount: 1 },
+    { name: 'references', maxCount: MAX_REFERENCE_IMAGES },
+  ]),
+  async (req, res) => {
+    let payload;
+    try {
+      payload = JSON.parse(req.body.payload || '{}');
+    } catch {
+      return res.status(400).json({ error: 'payload must be JSON.' });
+    }
+
+    const { settings, errors } = validateSettings(payload);
+    let prompt = typeof payload.prompt === 'string' ? payload.prompt.trim() : '';
+    if (!prompt) errors.push('prompt is required');
+
+    const startFrame = req.files?.start_frame?.[0] ?? null;
+    const references = req.files?.references ?? [];
+    if (references.length + (startFrame && references.length ? 1 : 0) > MAX_REFERENCE_IMAGES) {
+      errors.push(`at most ${MAX_REFERENCE_IMAGES} images (start frame + references) are allowed`);
+    }
+    if (errors.length) return res.status(400).json({ error: errors.join('; ') });
+
+    const nsfw = payload.nsfw === true;
+    if (nsfw) {
+      if (payload.adultsConfirmed !== true) {
+        return res.status(422).json({
+          error: 'NSFW mode requires confirming that everyone depicted is an adult (18+) who consented.',
+        });
+      }
+      const hit = findMinorReference(prompt);
+      if (hit) {
+        return res.status(422).json({
+          error: `NSFW requests may not reference minors (matched "${hit}"). Remove it or turn NSFW off.`,
+        });
+      }
+      const allImages = [startFrame, ...references].filter(Boolean);
+      const verdict = await checkImagesForMinors({
+        images: allImages,
+        apiKey: config.ofoxApiKey,
+        baseUrl: config.ofoxBaseUrl,
+        model: config.ageCheckModel,
+      });
+      if (!verdict.ok) return res.status(422).json({ error: verdict.reason });
+      if (!prompt.includes(NSFW_DIRECTIVE)) prompt += `\n\n${NSFW_DIRECTIVE}`;
+    } else if (!prompt.includes(SFW_DIRECTIVE)) {
+      prompt += `\n\n${SFW_DIRECTIVE}`;
+    }
+
+    const body = buildVideoRequest({
+      model: config.videoModel,
+      settings,
+      prompt,
+      startFrameUrl: startFrame ? publishImage(startFrame) : null,
+      referenceUrls: references.map(publishImage),
+    });
+
+    try {
+      const result = await ofox('/v1/videos', { method: 'POST', body: JSON.stringify(body) });
+      if (!result.ok) {
+        return res.status(result.status).json({ error: ofoxError(result.body, `Ofox returned HTTP ${result.status}`) });
+      }
+      res.status(202).json(summariseTask(result.body));
+    } catch (err) {
+      res.status(502).json({ error: `Could not reach Ofox: ${err.message}` });
+    }
+  },
+);
+
+app.get('/api/videos/:id', requireAppToken, async (req, res) => {
+  try {
+    const result = await ofox(`/v1/videos/${encodeURIComponent(req.params.id)}`);
+    if (!result.ok) {
+      return res.status(result.status).json({ error: ofoxError(result.body, `Ofox returned HTTP ${result.status}`) });
+    }
+    res.json(summariseTask(result.body));
+  } catch (err) {
+    res.status(502).json({ error: `Could not reach Ofox: ${err.message}` });
+  }
+});
+
+app.delete('/api/videos/:id', requireAppToken, async (req, res) => {
+  try {
+    const result = await ofox(`/v1/videos/${encodeURIComponent(req.params.id)}`, { method: 'DELETE' });
+    res.status(result.ok ? 200 : result.status).json(result.ok ? { cancelled: true } : { error: ofoxError(result.body, 'Cancel failed') });
+  } catch (err) {
+    res.status(502).json({ error: `Could not reach Ofox: ${err.message}` });
+  }
+});
+
+// Multer limit / filter errors.
+app.use((err, _req, res, _next) => {
+  res.status(400).json({ error: err.message || 'Bad request' });
+});
+
+app.listen(config.port, () => {
+  console.log(`Video generator server listening on :${config.port} (model ${config.videoModel})`);
+});
