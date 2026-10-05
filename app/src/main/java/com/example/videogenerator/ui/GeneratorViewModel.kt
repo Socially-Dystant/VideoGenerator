@@ -256,6 +256,8 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
                     resolution = s.resolution.apiValue,
                     duration = s.duration,
                     status = task.status.ifEmpty { "pending" },
+                    provider = task.provider,
+                    model = task.model,
                 )
                 repo.updateJobs { listOf(job) + it }
                 _state.update { it.copy(submitting = false, message = "Submitted! Track progress in History.") }
@@ -283,7 +285,88 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
 
     fun removeJob(id: String) = viewModelScope.launch { repo.updateJobs { list -> list.filterNot { it.id == id } } }
 
-    fun refreshJobs() = startPolling()
+    private val _historyMessage = MutableStateFlow<String?>(null)
+    val historyMessage: StateFlow<String?> = _historyMessage.asStateFlow()
+    private val _refreshing = MutableStateFlow(false)
+    val refreshing: StateFlow<Boolean> = _refreshing.asStateFlow()
+
+    /**
+     * Pulls the latest [RECENT_LIMIT] videos from SpicyAPI and Ofox, adds any the
+     * app hasn't seen, and updates status, links and metadata on the rest. Ofox
+     * doesn't document a job list, so when it has none the newest Ofox jobs
+     * already in History are re-checked one by one instead.
+     */
+    fun refreshJobs() {
+        if (_refreshing.value) return
+        val cfg = settings.value
+        if (cfg.serverUrl.isBlank() || cfg.appToken.isBlank()) {
+            _historyMessage.value = "Set the server URL and app token in Settings first."
+            return
+        }
+        _refreshing.value = true
+        viewModelScope.launch {
+            try {
+                val recent = api.recent(cfg.serverUrl, cfg.appToken, RECENT_LIMIT)
+                val ofoxTasks = if (recent.ofoxListed) recent.ofox else {
+                    repo.jobs.first().filterNot { it.isSpicy }.sortedByDescending { it.createdAt }.take(RECENT_LIMIT)
+                        .mapNotNull { job -> runCatching { api.status(cfg.serverUrl, cfg.appToken, job.id) }.getOrNull() }
+                }
+                var added = 0
+                repo.updateJobs { list ->
+                    val byId = LinkedHashMap(list.associateBy { it.id })
+                    (recent.spicy + ofoxTasks).forEach { task ->
+                        val existing = byId[task.id]
+                        if (existing == null) added++
+                        byId[task.id] = mergeTask(existing, task)
+                    }
+                    byId.values.sortedByDescending { it.createdAt }
+                }
+                _historyMessage.value = buildString {
+                    append("Updated ${recent.spicy.size} from SpicyAPI and ${ofoxTasks.size} from Ofox")
+                    if (added > 0) append(" ($added new)")
+                    append(".")
+                    recent.notes.forEach { append("\n").append(it) }
+                }
+                startPolling()
+            } catch (e: Exception) {
+                _historyMessage.value = e.message ?: "Refresh failed."
+            } finally {
+                _refreshing.value = false
+            }
+        }
+    }
+
+    fun dismissHistoryMessage() {
+        _historyMessage.value = null
+    }
+
+    /** Creates or updates a History entry from a provider task, keeping what the app already knows. */
+    private fun mergeTask(existing: Job?, task: TaskResponse): Job {
+        val base = existing ?: Job(
+            id = task.id,
+            createdAt = parseInstant(task.createdAt) ?: System.currentTimeMillis(),
+            prompt = task.prompt.orEmpty(),
+            resolution = task.resolution.orEmpty(),
+            duration = task.duration?.toInt() ?: 0,
+            status = task.status,
+        )
+        return base.copy(
+            status = task.status.ifEmpty { base.status },
+            videoUrl = task.videoUrl ?: base.videoUrl,
+            error = task.error ?: base.error,
+            costUsd = task.costUsd ?: base.costUsd,
+            billedSeconds = task.billedSeconds ?: base.billedSeconds,
+            provider = task.provider ?: base.provider,
+            model = task.model ?: base.model,
+            completedAt = parseInstant(task.completedAt) ?: base.completedAt,
+            prompt = base.prompt.ifBlank { task.prompt.orEmpty() },
+            resolution = base.resolution.ifBlank { task.resolution.orEmpty() },
+            duration = if (base.duration > 0) base.duration else task.duration?.toInt() ?: 0,
+        )
+    }
+
+    private fun parseInstant(iso: String?): Long? =
+        iso?.let { runCatching { java.time.Instant.parse(it).toEpochMilli() }.getOrNull() }
 
     private fun startPolling() {
         if (pollJob?.isActive == true) return
@@ -303,17 +386,13 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
 
     private suspend fun applyTask(id: String, task: TaskResponse) = repo.updateJobs { list ->
         list.map {
-            if (it.id != id) it else it.copy(
-                status = task.status.ifEmpty { it.status },
-                videoUrl = task.videoUrl ?: it.videoUrl,
-                error = task.error ?: it.error,
-                costUsd = task.costUsd ?: it.costUsd,
-            )
+            if (it.id != id) it else mergeTask(it, task)
         }
     }
 
     private companion object {
         const val POLL_INTERVAL_MS = 5_000L
+        const val RECENT_LIMIT = 5
 
         fun emptyInput() = PromptInput("", emptyList(), emptyList(), false, 10, emptyList(), false, com.example.videogenerator.model.TagStyle.WAN)
     }

@@ -190,6 +190,39 @@ app.post(
   },
 );
 
+// The latest jobs from each provider, newest first. Registered before /:id so
+// "recent" isn't treated as a job id.
+app.get('/api/videos/recent', requireAppToken, async (req, res) => {
+  const limit = Math.min(Math.max(Number(req.query.limit) || 5, 1), 20);
+  const notes = [];
+
+  const spicyJobs = spicy
+    ? spicy.listRecent(limit).catch((err) => {
+        notes.push(`SpicyAPI: ${err.message}`);
+        return [];
+      })
+    : Promise.resolve([]);
+
+  // Ofox doesn't document a list endpoint; this tries the OpenAI-style one and
+  // reports when it isn't available so the app can fall back to its own job ids.
+  const ofoxJobs = ofox(`/v1/videos?limit=${limit}&order=desc`)
+    .then((result) => {
+      const data = Array.isArray(result.body?.data) ? result.body.data : null;
+      if (!result.ok || !data) {
+        notes.push('Ofox has no job list; only videos made from this app are refreshed.');
+        return { listed: false, jobs: [] };
+      }
+      return { listed: true, jobs: data.slice(0, limit).map(summariseTask) };
+    })
+    .catch((err) => {
+      notes.push(`Ofox: ${err.message}`);
+      return { listed: false, jobs: [] };
+    });
+
+  const [spicyList, ofoxList] = await Promise.all([spicyJobs, ofoxJobs]);
+  res.json({ spicy: spicyList, ofox: ofoxList.jobs, ofoxListed: ofoxList.listed, notes });
+});
+
 app.get('/api/videos/:id', requireAppToken, async (req, res) => {
   if (isSpicyId(req.params.id)) {
     if (!spicy) return res.status(503).json({ error: 'SPICY_API_KEY missing on the server.' });

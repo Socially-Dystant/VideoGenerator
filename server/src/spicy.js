@@ -96,7 +96,16 @@ class SpicyClient {
       headers: { 'Idempotency-Key': crypto.randomUUID() },
       body: JSON.stringify(task),
     });
-    return { id: ID_PREFIX + data.taskId, status: STATE_TO_STATUS[data.state] || data.state, videoUrl: null, error: null, costUsd: null, billedSeconds: null };
+    return {
+      id: ID_PREFIX + data.taskId,
+      provider: 'spicy',
+      model: task.model,
+      status: STATE_TO_STATUS[data.state] || data.state,
+      videoUrl: null,
+      error: null,
+      costUsd: null,
+      billedSeconds: null,
+    };
   }
 
   // Asset URLs expire after ~20 minutes, so the app asks for a fresh one before playing or saving.
@@ -105,12 +114,44 @@ class SpicyClient {
     const video = data.output?.assets?.find((a) => a.mime?.startsWith('video/')) ?? data.output?.assets?.[0];
     return {
       id,
+      provider: 'spicy',
+      model: data.model ?? null,
       status: STATE_TO_STATUS[data.state] || data.state,
       videoUrl: video?.url ?? null,
       error: data.errorMessage ?? null,
       costUsd: data.cost != null ? Number(data.cost) : null,
       billedSeconds: null,
+      createdAt: data.createdAt ?? null,
+      completedAt: data.completedAt ?? null,
     };
+  }
+
+  /**
+   * Most recent jobs for this model family. The list endpoint has no prompt or
+   * output, so each job is re-read with recordInfo to get its video link.
+   */
+  async listRecent(limit) {
+    const page = await this.call('/jobs?limit=100');
+    const items = (page.items ?? page ?? [])
+      .filter((item) => !item.model || item.model.startsWith(this.modelBase))
+      .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+      .slice(0, limit);
+    return Promise.all(
+      items.map((item) =>
+        this.getTask(ID_PREFIX + item.taskId).catch(() => ({
+          id: ID_PREFIX + item.taskId,
+          provider: 'spicy',
+          model: item.model ?? null,
+          status: STATE_TO_STATUS[item.state] || item.state,
+          videoUrl: null,
+          error: null,
+          costUsd: item.cost != null ? Number(item.cost) : null,
+          billedSeconds: null,
+          createdAt: item.createdAt ?? null,
+          completedAt: null,
+        })),
+      ),
+    );
   }
 }
 

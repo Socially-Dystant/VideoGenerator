@@ -56,16 +56,32 @@ function validateSettings(raw) {
   return { settings, errors };
 }
 
+// Accepts unix seconds, unix milliseconds or an ISO string.
+function toIso(value) {
+  if (value == null || value === '') return null;
+  const date = typeof value === 'number' ? new Date(value < 1e12 ? value * 1000 : value) : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
 // Collapses the Ofox task object into the small shape the app consumes.
+// Metadata fields beyond status/usage aren't documented by Ofox, so each is optional.
 function summariseTask(task) {
   const videoUrl = task.mirror_urls?.[0] ?? task.unsigned_urls?.[0] ?? task.video_url ?? null;
+  const duration = Number(task.duration ?? task.seconds);
   return {
     id: task.id,
+    provider: 'ofox',
+    model: task.model ?? null,
     status: task.status,
     videoUrl,
     error: task.error?.message ?? task.error ?? null,
     costUsd: task.usage?.video_cost ?? null,
     billedSeconds: task.usage?.video_seconds ?? null,
+    prompt: typeof task.prompt === 'string' ? task.prompt : null,
+    resolution: task.resolution ?? null,
+    duration: Number.isFinite(duration) ? duration : null,
+    createdAt: toIso(task.created_at ?? task.createdAt),
+    completedAt: toIso(task.completed_at ?? task.completedAt),
   };
 }
 
@@ -76,4 +92,5 @@ module.exports = {
   buildVideoRequest,
   validateSettings,
   summariseTask,
+  toIso,
 };

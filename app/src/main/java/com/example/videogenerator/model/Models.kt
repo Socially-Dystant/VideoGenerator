@@ -101,7 +101,15 @@ data class Job(
     val videoUrl: String? = null,
     val error: String? = null,
     val costUsd: Double? = null,
+    val provider: String? = null,
+    val model: String? = null,
+    val completedAt: Long? = null,
+    val billedSeconds: Double? = null,
 ) {
+    /** Empty for jobs imported by Refresh that weren't created from this app. */
+    val hasPrompt: Boolean get() = prompt.isNotBlank()
+    val providerLabel: String get() = if (isSpicy || provider == "spicy") "SpicyAPI" else "Ofox"
+
     val isTerminal: Boolean get() = status in TERMINAL_STATUSES
 
     /** NSFW jobs run on SpicyAPI: they can't be cancelled and their video links expire after ~20 minutes. */

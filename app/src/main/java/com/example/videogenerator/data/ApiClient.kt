@@ -27,6 +27,24 @@ data class TaskResponse(
     val error: String? = null,
     val costUsd: Double? = null,
     val billedSeconds: Double? = null,
+    /** "ofox" or "spicy". */
+    val provider: String? = null,
+    val model: String? = null,
+    val prompt: String? = null,
+    val resolution: String? = null,
+    val duration: Double? = null,
+    /** ISO-8601. */
+    val createdAt: String? = null,
+    val completedAt: String? = null,
+)
+
+@Serializable
+data class RecentResponse(
+    val spicy: List<TaskResponse> = emptyList(),
+    val ofox: List<TaskResponse> = emptyList(),
+    /** False when Ofox has no list endpoint and only known job ids can be refreshed. */
+    val ofoxListed: Boolean = false,
+    val notes: List<String> = emptyList(),
 )
 
 @Serializable
@@ -74,6 +92,19 @@ class ApiClient(private val context: Context) {
 
     suspend fun status(baseUrl: String, token: String, id: String): TaskResponse = withContext(Dispatchers.IO) {
         execute(Request.Builder().url("$baseUrl/api/videos/$id").get(), token)
+    }
+
+    suspend fun recent(baseUrl: String, token: String, limit: Int): RecentResponse = withContext(Dispatchers.IO) {
+        val request = Request.Builder().url("$baseUrl/api/videos/recent?limit=$limit")
+            .header("Authorization", "Bearer $token").build()
+        http.newCall(request).execute().use { res ->
+            val text = res.body?.string().orEmpty()
+            if (!res.isSuccessful) {
+                val msg = runCatching { json.decodeFromString(ErrorResponse.serializer(), text).error }.getOrNull()
+                throw ApiException(msg ?: "Server returned HTTP ${res.code}")
+            }
+            json.decodeFromString(RecentResponse.serializer(), text)
+        }
     }
 
     suspend fun cancel(baseUrl: String, token: String, id: String) = withContext(Dispatchers.IO) {
