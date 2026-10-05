@@ -57,6 +57,31 @@ data class ReferenceImage(
     val note: String = "",
 )
 
+/**
+ * A named person built from one or more of the uploaded images, with a wardrobe
+ * that must stay identical across every shot.
+ */
+data class Character(
+    val id: Long,
+    val name: String = "",
+    /** [ReferenceImage.id]s, or [START_FRAME_IMAGE_ID] for the start frame. */
+    val imageIds: List<Long> = emptyList(),
+    val top: String = "",
+    val bottom: String = "",
+    val footwear: String = "",
+    val accessories: String = "",
+    val otherClothing: String = "",
+    /** Tattoos, scars, piercings, makeup, glasses… anything that must not change. */
+    val features: String = "",
+) {
+    val tag: String get() = name.lowercase()
+    val hasClothing: Boolean get() = listOf(top, bottom, footwear, accessories, otherClothing).any { it.isNotBlank() }
+
+    companion object {
+        const val START_FRAME_IMAGE_ID = -1L
+    }
+}
+
 @Serializable
 data class Instruction(
     val id: Long,

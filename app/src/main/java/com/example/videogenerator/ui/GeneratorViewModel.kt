@@ -10,6 +10,7 @@ import com.example.videogenerator.data.Repository
 import com.example.videogenerator.data.TaskResponse
 import com.example.videogenerator.model.AppSettings
 import com.example.videogenerator.model.AspectRatio
+import com.example.videogenerator.model.Character
 import com.example.videogenerator.model.Instruction
 import com.example.videogenerator.model.Job
 import com.example.videogenerator.model.ReferenceImage
@@ -37,6 +38,10 @@ data class CreateState(
     val shots: List<Shot> = listOf(Shot(id = 1)),
     val references: List<ReferenceImage> = emptyList(),
     val startFrame: String? = null,
+    val characters: List<Character> = emptyList(),
+    /** Set after the first images are added, to offer creating a character. */
+    val offerCharacter: Boolean = false,
+    val characterOffered: Boolean = false,
     val resolution: Resolution = Resolution.P720,
     val duration: Int = 10,
     val aspectRatio: AspectRatio = AspectRatio.ADAPTIVE,
@@ -72,6 +77,7 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
                 shots = s.shots,
                 references = s.references,
                 hasStartFrame = s.startFrame != null,
+                characters = s.characters,
                 durationSeconds = s.duration,
                 instructions = ins.filter { it.enabled }.map { it.text },
                 nsfw = s.nsfw,
@@ -101,7 +107,7 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
             used += "ref$n"
             ReferenceImage(id = nextId++, uri = uri.toString(), tag = "ref$n")
         }
-        val next = s.copy(references = s.references + added)
+        val next = s.copy(references = s.references + added).offerCharacterIfNew()
         if (uris.size > free) next.copy(message = "Only ${s.maxReferences} reference images are allowed.") else next
     }
 
@@ -109,14 +115,58 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
         s.copy(references = s.references.map { if (it.id == id) transform(it) else it })
     }
 
-    fun removeReference(id: Long) = edit { s -> s.copy(references = s.references.filterNot { it.id == id }) }
+    fun removeReference(id: Long) = edit { s ->
+        s.copy(references = s.references.filterNot { it.id == id }).withoutCharacterImage(id)
+    }
 
     fun setStartFrame(uri: Uri?) = edit { s ->
-        val next = s.copy(startFrame = uri?.toString())
+        val next = s.copy(startFrame = uri?.toString()).let {
+            if (uri == null) it.withoutCharacterImage(Character.START_FRAME_IMAGE_ID) else it.offerCharacterIfNew()
+        }
         if (next.references.size > next.maxReferences) {
             next.copy(references = next.references.take(next.maxReferences), message = "Removed one reference to make room for the start frame.")
         } else next
     }
+
+    // --- Characters -----------------------------------------------------------------
+
+    fun dismissCharacterOffer() = edit { it.copy(offerCharacter = false) }
+
+    fun newCharacter() = Character(id = nextId++)
+
+    /** Returns an error message, or null once the character is saved. */
+    fun saveCharacter(character: Character): String? {
+        val s = _state.value
+        val name = character.name.trim()
+        val taken = s.references.map { it.tag.lowercase() } + PromptBuilder.START_FRAME_TAG +
+            s.characters.filter { it.id != character.id }.map { it.tag }
+        val error = when {
+            character.imageIds.isEmpty() -> "Choose at least one image of this character."
+            name.isEmpty() -> "Give the character a name."
+            !name.matches(Regex("[A-Za-z][A-Za-z0-9_]*")) -> "Use one word for the name: letters, numbers and _ (it becomes @${name.filter { it.isLetterOrDigit() || it == '_' }})."
+            name.lowercase() in taken -> "\"$name\" is already used by another image or character."
+            !character.hasClothing -> "Describe the clothing so it stays the same in every shot."
+            else -> null
+        }
+        if (error != null) return error
+        val saved = character.copy(name = name)
+        edit { st ->
+            val exists = st.characters.any { it.id == saved.id }
+            st.copy(
+                characters = if (exists) st.characters.map { if (it.id == saved.id) saved else it } else st.characters + saved,
+                offerCharacter = false,
+            )
+        }
+        return null
+    }
+
+    fun removeCharacter(id: Long) = edit { s -> s.copy(characters = s.characters.filterNot { it.id == id }) }
+
+    private fun CreateState.offerCharacterIfNew() =
+        if (characterOffered || characters.isNotEmpty()) this else copy(offerCharacter = true, characterOffered = true)
+
+    private fun CreateState.withoutCharacterImage(imageId: Long) =
+        copy(characters = characters.map { c -> c.copy(imageIds = c.imageIds - imageId) })
 
     // --- Shots ----------------------------------------------------------------
 
@@ -159,6 +209,12 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
         val tags = s.references.map { it.tag.lowercase() }
         if (tags.any { !it.matches(Regex("[a-z0-9_]+")) }) return "Reference tags may only contain letters, numbers and _."
         if (tags.size != tags.toSet().size || "start" in tags) return "Each reference needs a unique tag (\"start\" is reserved)."
+        s.characters.firstOrNull { it.imageIds.isEmpty() }?.let {
+            return "${it.name} has no images left. Edit the character and choose at least one."
+        }
+        s.characters.firstOrNull { it.tag in tags }?.let {
+            return "@${it.tag} is used by both a reference image and a character. Rename one of them."
+        }
         if (s.seed.isNotBlank() && s.seed.toLongOrNull() == null) return "Seed must be a whole number."
         if (s.nsfw) {
             if (!s.adultsConfirmed) return "Confirm that everyone depicted is a consenting adult (18+)."

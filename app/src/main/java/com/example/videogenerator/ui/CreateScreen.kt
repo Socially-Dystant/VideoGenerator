@@ -32,10 +32,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
@@ -73,6 +76,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.example.videogenerator.model.AspectRatio
+import com.example.videogenerator.model.Character
 import com.example.videogenerator.model.DURATIONS
 import com.example.videogenerator.model.Resolution
 import com.example.videogenerator.model.Shot
@@ -95,6 +99,43 @@ fun CreateScreen(vm: GeneratorViewModel, modifier: Modifier = Modifier) {
     }
     val imagesOnly = PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
     val tagNames = prompt.tagMap.keys.toList()
+    var editingCharacter by remember { mutableStateOf<Character?>(null) }
+
+    val characterImages = buildList {
+        state.startFrame?.let { add(CharacterImageOption(Character.START_FRAME_IMAGE_ID, it, "@start")) }
+        state.references.forEach { add(CharacterImageOption(it.id, it.uri, "@${it.tag}")) }
+    }
+
+    if (state.offerCharacter) {
+        AlertDialog(
+            onDismissRequest = vm::dismissCharacterOffer,
+            icon = { Icon(Icons.Default.Person, null) },
+            title = { Text("Create a character?") },
+            text = {
+                Text(
+                    "Turn the person in these images into a named character. The prompt will lock their appearance " +
+                        "and clothing so they look the same in every shot.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.dismissCharacterOffer()
+                    editingCharacter = vm.newCharacter()
+                }) { Text("Create character") }
+            },
+            dismissButton = { TextButton(onClick = vm::dismissCharacterOffer) { Text("Not now") } },
+        )
+    }
+
+    editingCharacter?.let { character ->
+        CharacterEditorDialog(
+            initial = character,
+            isNew = state.characters.none { it.id == character.id },
+            images = characterImages,
+            onSave = vm::saveCharacter,
+            onDismiss = { editingCharacter = null },
+        )
+    }
 
     Column(
         modifier
@@ -159,6 +200,46 @@ fun CreateScreen(vm: GeneratorViewModel, modifier: Modifier = Modifier) {
                 OutlinedButton(onClick = { pickRefs.launch(imagesOnly) }) {
                     Icon(Icons.Default.Add, null); Spacer(Modifier.width(8.dp)); Text("Add reference images")
                 }
+            }
+        }
+
+        // --- Characters ---------------------------------------------------------------------
+        Section(
+            "Characters",
+            "Lock a person's look and outfit across every shot. Refer to them as @Name in the scene and shots.",
+        ) {
+            state.characters.forEach { character ->
+                OutlinedCard(Modifier.fillMaxWidth()) {
+                    Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        characterImages.firstOrNull { it.id in character.imageIds }?.let { Thumbnail(it.uri, Modifier.size(56.dp)) }
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("@${character.name}", style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                prompt.tagMap["@${character.tag}"].orEmpty(),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.secondary,
+                            )
+                            Text(
+                                listOf(character.top, character.bottom, character.footwear).filter { it.isNotBlank() }.joinToString(" · "),
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 2,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            )
+                        }
+                        IconButton(onClick = { editingCharacter = character }) { Icon(Icons.Default.Edit, "Edit character") }
+                        IconButton(onClick = { vm.removeCharacter(character.id) }) { Icon(Icons.Default.Delete, "Delete character") }
+                    }
+                }
+            }
+            OutlinedButton(
+                onClick = { editingCharacter = vm.newCharacter() },
+                enabled = characterImages.isNotEmpty(),
+            ) {
+                Icon(Icons.Default.Person, null); Spacer(Modifier.width(8.dp)); Text("Create character")
+            }
+            if (characterImages.isEmpty()) {
+                Text("Add a start frame or reference images first.", style = MaterialTheme.typography.bodySmall)
             }
         }
 

@@ -13,6 +13,7 @@ API keys only live on the server, so they can't be pulled out of the APK.
 
 - Start frame + up to 9 reference images (8 when a start frame is used), each with an `@tag` and an optional note.
 - Scene description and an ordered shot list (framing, optional length, description). Shots without a length split the leftover time evenly.
+- Characters: after you add images the app offers to create one. Pick which uploads show the person, name them, and describe their clothing piece by piece. The prompt then adds an identity lock (face, hair, body, skin, distinguishing features) and a wardrobe-continuity block, and `@Name` in the scene or shots becomes `Name (Image 1, Image 2)`.
 - Live prompt preview showing exactly what is sent, with `@tags` resolved to Wan's image labels (`Image 1`, `Image 2`, …; switchable to `@Image1` in Settings).
 - Permanent instructions (Instructions tab) added to the top of every prompt, each with an on/off switch.
 - Resolution 480p / 720p / 1080p, duration 5–30 s, aspect ratio, audio on/off, optional seed, cost estimate.

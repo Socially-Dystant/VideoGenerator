@@ -1,5 +1,6 @@
 package com.example.videogenerator
 
+import com.example.videogenerator.model.Character
 import com.example.videogenerator.model.ReferenceImage
 import com.example.videogenerator.model.Shot
 import com.example.videogenerator.model.ShotType
@@ -79,5 +80,37 @@ class PromptBuilderTest {
         assertNotNull(Safety.findMinorReference("a 16 year old"))
         assertNotNull(Safety.findMinorReference("High-school uniform"))
         assertNull(Safety.findMinorReference("a 30 year old man, personal season"))
+    }
+
+    private val mara = Character(
+        id = 10,
+        name = "Mara",
+        imageIds = listOf(Character.START_FRAME_IMAGE_ID, 1),
+        top = "cropped black leather biker jacket over a white ribbed tank top",
+        bottom = "light-wash straight-leg jeans",
+        footwear = "white canvas sneakers",
+        features = "rose tattoo on left wrist",
+    )
+
+    @Test
+    fun characterTagResolvesToItsImages() {
+        val p = PromptBuilder.build(input().copy(characters = listOf(mara), scene = "@Mara walks to @car."))
+        assertEquals("Mara (Image 1, Image 2)", p.tagMap["@mara"])
+        assertTrue(p.text.contains("Scene: Mara (Image 1, Image 2) walks to Image 3."))
+        assertTrue(p.unknownTags.isEmpty())
+    }
+
+    @Test
+    fun characterBlockLocksIdentityAndWardrobe() {
+        val p = PromptBuilder.build(input().copy(characters = listOf(mara), scene = "@Mara walks."))
+        println(p.text)
+        assertTrue(p.text.contains("Character Mara (Image 1, Image 2):"))
+        assertTrue(p.text.contains("Mara is the exact person shown in Image 1 and Image 2; all of these images show the same person."))
+        assertTrue(p.text.contains("- Top / outerwear: cropped black leather biker jacket over a white ribbed tank top."))
+        assertTrue(p.text.contains("- Footwear: white canvas sneakers."))
+        assertTrue(p.text.contains("Distinguishing features that must always be visible and unchanged: rose tattoo on left wrist."))
+        assertTrue(p.text.contains("Do not add, remove, swap, recolour or restyle any item"))
+        // Character section comes before the scene so the model knows who @Mara is first.
+        assertTrue(p.text.indexOf("Character Mara") < p.text.indexOf("Scene:"))
     }
 }
