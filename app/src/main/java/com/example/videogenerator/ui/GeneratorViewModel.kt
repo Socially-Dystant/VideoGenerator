@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.videogenerator.data.ApiClient
 import com.example.videogenerator.data.CharacterLibrary
+import com.example.videogenerator.data.FrameExtractor
 import com.example.videogenerator.data.GenerateRequest
 import com.example.videogenerator.data.Repository
 import com.example.videogenerator.data.TaskResponse
@@ -64,6 +65,7 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
     private val repo = Repository(app)
     private val api = ApiClient(app)
     private val library = CharacterLibrary(app)
+    private val frameExtractor = FrameExtractor(app)
     private var nextId = System.currentTimeMillis()
     private var pollJob: CoroutineJob? = null
 
@@ -440,6 +442,32 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
                 _historyMessage.value = e.message ?: "Refresh failed."
             } finally {
                 _refreshing.value = false
+            }
+        }
+    }
+
+    /** Id of the job whose last frame is being extracted, if any. */
+    private val _extractingFrame = MutableStateFlow<String?>(null)
+    val extractingFrame: StateFlow<String?> = _extractingFrame.asStateFlow()
+
+    /**
+     * Uses the last frame of [job]'s video as the start frame of the next video.
+     * The current scene, shots and characters are kept so the story can continue.
+     */
+    fun continueFromLastFrame(job: Job, onReady: () -> Unit) {
+        if (_extractingFrame.value != null) return
+        _extractingFrame.value = job.id
+        viewModelScope.launch {
+            try {
+                val url = freshVideoUrl(job) ?: throw IllegalStateException("Couldn't get the video link. Try Refresh.")
+                val frame = frameExtractor.lastFrame(url, name = job.id.takeLast(12).replace(Regex("[^A-Za-z0-9_-]"), "_"))
+                setStartFrame(Uri.fromFile(frame))
+                _state.update { it.copy(message = "Start frame set from the last frame of that video. Describe what happens next.") }
+                onReady()
+            } catch (e: Exception) {
+                _historyMessage.value = "Couldn't use the last frame: ${e.message}"
+            } finally {
+                _extractingFrame.value = null
             }
         }
     }

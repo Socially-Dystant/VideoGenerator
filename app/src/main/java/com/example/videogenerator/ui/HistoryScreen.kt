@@ -52,10 +52,11 @@ import java.util.Date
 import kotlinx.coroutines.launch
 
 @Composable
-fun HistoryScreen(vm: GeneratorViewModel, modifier: Modifier = Modifier) {
+fun HistoryScreen(vm: GeneratorViewModel, modifier: Modifier = Modifier, onOpenCreate: () -> Unit = {}) {
     val jobs by vm.jobs.collectAsState()
     val refreshing by vm.refreshing.collectAsState()
     val erasing by vm.erasing.collectAsState()
+    val extractingFrame by vm.extractingFrame.collectAsState()
     var confirmEraseAll by remember { mutableStateOf(false) }
     var confirmErase by remember { mutableStateOf<Job?>(null) }
     val message by vm.historyMessage.collectAsState()
@@ -104,7 +105,12 @@ fun HistoryScreen(vm: GeneratorViewModel, modifier: Modifier = Modifier) {
         if (jobs.isEmpty()) {
             item { Text("Nothing yet. Generated videos show up here.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
-        items(jobs, key = { it.id }) { job -> JobCard(job, vm, context, erasing, onErase = { confirmErase = job }) }
+        items(jobs, key = { it.id }) { job -> JobCard(
+                job, vm, context, erasing,
+                extracting = extractingFrame == job.id,
+                onErase = { confirmErase = job },
+                onUseLastFrame = { vm.continueFromLastFrame(job, onOpenCreate) },
+            ) }
     }
 
     confirmErase?.let { job ->
@@ -163,7 +169,15 @@ private fun eraseExplanation(job: Job): String = when {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun JobCard(job: Job, vm: GeneratorViewModel, context: Context, erasing: Boolean, onErase: () -> Unit) {
+private fun JobCard(
+    job: Job,
+    vm: GeneratorViewModel,
+    context: Context,
+    erasing: Boolean,
+    extracting: Boolean,
+    onErase: () -> Unit,
+    onUseLastFrame: () -> Unit,
+) {
     var playUrl by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     // Fetch a current link first; SpicyAPI links expire after ~20 minutes.
@@ -224,6 +238,15 @@ private fun JobCard(job: Job, vm: GeneratorViewModel, context: Context, erasing:
                         Text(if (playUrl != null) "Hide" else "Play")
                     }
                     TextButton(onClick = { withUrl { download(context, job, it) } }) { Text("Save") }
+                    if (job.status == "completed") {
+                        TextButton(onClick = onUseLastFrame, enabled = !extracting) {
+                            if (extracting) {
+                                CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
+                                Spacer(Modifier.width(6.dp))
+                            }
+                            Text("Continue from last frame")
+                        }
+                    }
                     TextButton(onClick = {
                         withUrl { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(it))) }
                     }) { Text("Open") }

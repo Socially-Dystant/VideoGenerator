@@ -87,7 +87,7 @@ class MainActivity : ComponentActivity() {
                     when (tab) {
                         Tab.CREATE -> CreateScreen(vm, modifier)
                         Tab.INSTRUCTIONS -> InstructionsScreen(vm, modifier)
-                        Tab.HISTORY -> HistoryScreen(vm, modifier)
+                        Tab.HISTORY -> HistoryScreen(vm, modifier, onOpenCreate = { tab = Tab.CREATE })
                         Tab.SETTINGS -> SettingsScreen(vm, modifier)
                     }
                 }
