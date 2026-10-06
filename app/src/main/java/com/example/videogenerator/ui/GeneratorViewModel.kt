@@ -9,6 +9,7 @@ import com.example.videogenerator.data.Balances
 import com.example.videogenerator.data.CharacterLibrary
 import com.example.videogenerator.data.FrameExtractor
 import com.example.videogenerator.data.GenerateRequest
+import com.example.videogenerator.data.ImageRequest
 import com.example.videogenerator.data.Repository
 import com.example.videogenerator.data.TaskResponse
 import com.example.videogenerator.model.AppSettings
@@ -39,6 +40,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 data class CreateState(
+    /** Scene description for video; the prompt for images. */
     val scene: String = "",
     val shots: List<Shot> = listOf(Shot(id = 1)),
     val references: List<ReferenceImage> = emptyList(),
@@ -51,6 +53,10 @@ data class CreateState(
     val duration: Int = 10,
     val aspectRatio: AspectRatio = AspectRatio.ADAPTIVE,
     val generateAudio: Boolean = true,
+    /** Image workspace only: "2k" or "4k" (4K is prompt-only). */
+    val imageResolution: String = "2k",
+    /** Image workspace only. */
+    val imageAspect: String = "1:1",
     val seed: String = "",
     val nsfw: Boolean = false,
     val adultsConfirmed: Boolean = false,
@@ -62,6 +68,13 @@ data class CreateState(
     val estimatedCostUsd: Double get() = (if (nsfw) resolution.nsfwUsdPerSecond else resolution.usdPerSecond) * duration
 }
 
+/** The Create Video and Create Image screens each keep their own references, characters and prompt. */
+enum class Workspace { VIDEO, IMAGE }
+
+/** Wan 2.7 Pro image aspect ratios. */
+val IMAGE_ASPECTS = listOf("1:1", "4:3", "3:4", "16:9", "9:16", "3:2", "2:3")
+const val IMAGE_PRICE_USD = 0.075
+
 class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
     private val repo = Repository(app)
     private val api = ApiClient(app)
@@ -72,6 +85,10 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _state = MutableStateFlow(CreateState())
     val state: StateFlow<CreateState> = _state.asStateFlow()
+    private val _imageState = MutableStateFlow(CreateState(shots = emptyList(), characterOffered = false))
+    val imageState: StateFlow<CreateState> = _imageState.asStateFlow()
+
+    private fun flow(ws: Workspace) = if (ws == Workspace.IMAGE) _imageState else _state
 
     val settings: StateFlow<AppSettings> = repo.settings.stateIn(viewModelScope, SharingStarted.Eagerly, AppSettings())
     val instructions: StateFlow<List<Instruction>> = repo.instructions.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
@@ -95,17 +112,17 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Feedback for library actions, shown in the Characters section. */
+    /** Feedback for library actions, shown in the Characters sections. */
     private val _libraryMessage = MutableStateFlow<String?>(null)
     val libraryMessage: StateFlow<String?> = _libraryMessage.asStateFlow()
 
-    val prompt: StateFlow<BuiltPrompt> = combine(_state, instructions, settings) { s, ins, cfg ->
+    private fun promptFlow(source: StateFlow<CreateState>, image: Boolean) = combine(source, instructions, settings) { s, ins, cfg ->
         PromptBuilder.build(
             PromptInput(
                 scene = s.scene,
-                shots = s.shots,
+                shots = if (image) emptyList() else s.shots,
                 references = s.references,
-                hasStartFrame = s.startFrame != null,
+                hasStartFrame = !image && s.startFrame != null,
                 characters = s.characters,
                 durationSeconds = s.duration,
                 instructions = ins.filter { it.enabled }.map { it.text },
@@ -115,19 +132,23 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
         )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, PromptBuilder.build(emptyInput()))
 
+    val prompt: StateFlow<BuiltPrompt> = promptFlow(_state, image = false)
+    val imagePrompt: StateFlow<BuiltPrompt> = promptFlow(_imageState, image = true)
+
     init {
         viewModelScope.launch {
             if (repo.jobs.first().any { !it.isTerminal }) startPolling()
         }
     }
 
-    fun edit(transform: (CreateState) -> CreateState) = _state.update { transform(it).copy(message = null) }
+    fun edit(ws: Workspace = Workspace.VIDEO, transform: (CreateState) -> CreateState) =
+        flow(ws).update { transform(it).copy(message = null) }
 
-    fun dismissMessage() = _state.update { it.copy(message = null) }
+    fun dismissMessage(ws: Workspace = Workspace.VIDEO) = flow(ws).update { it.copy(message = null) }
 
     // --- Images ---------------------------------------------------------------
 
-    fun addReferences(uris: List<Uri>) = edit { s ->
+    fun addReferences(uris: List<Uri>, ws: Workspace = Workspace.VIDEO) = edit(ws) { s ->
         val free = s.maxReferences - s.references.size
         val used = s.references.map { it.tag.lowercase() }.toMutableSet()
         val added = uris.take(free).map { uri ->
@@ -140,11 +161,11 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
         if (uris.size > free) next.copy(message = "Only ${s.maxReferences} reference images are allowed.") else next
     }
 
-    fun updateReference(id: Long, transform: (ReferenceImage) -> ReferenceImage) = edit { s ->
+    fun updateReference(id: Long, ws: Workspace = Workspace.VIDEO, transform: (ReferenceImage) -> ReferenceImage) = edit(ws) { s ->
         s.copy(references = s.references.map { if (it.id == id) transform(it) else it })
     }
 
-    fun removeReference(id: Long) = edit { s ->
+    fun removeReference(id: Long, ws: Workspace = Workspace.VIDEO) = edit(ws) { s ->
         s.copy(references = s.references.filterNot { it.id == id }).withoutCharacterImage(id)
     }
 
@@ -159,35 +180,39 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
 
     // --- Characters -----------------------------------------------------------------
 
-    fun dismissCharacterOffer() = edit { it.copy(offerCharacter = false) }
+    fun dismissCharacterOffer(ws: Workspace = Workspace.VIDEO) = edit(ws) { it.copy(offerCharacter = false) }
 
     fun newCharacter() = Character(id = nextId++)
 
     /** Returns an error message, or null once the character is saved. */
-    fun saveCharacter(character: Character, toLibrary: Boolean = false): String? {
-        val s = _state.value
+    fun saveCharacter(character: Character, toLibrary: Boolean = false, ws: Workspace = Workspace.VIDEO): String? {
+        val s = flow(ws).value
         val name = character.name.trim()
         val taken = s.references.map { it.tag.lowercase() } + PromptBuilder.START_FRAME_TAG +
             s.characters.filter { it.id != character.id }.map { it.tag }
-        val error = when {
-            character.imageIds.isEmpty() -> "Choose at least one image of this character."
-            name.isEmpty() -> "Give the character a name."
-            !name.matches(Regex("[A-Za-z][A-Za-z0-9_]*")) -> "Use one word for the name: letters, numbers and _ (it becomes @${name.filter { it.isLetterOrDigit() || it == '_' }})."
-            name.lowercase() in taken -> "\"$name\" is already used by another image or character."
-            !character.hasClothing -> "Describe the clothing so it stays the same in every shot."
-            else -> null
-        }
+        val error = characterError(character, name) ?: if (name.lowercase() in taken) {
+            "\"$name\" is already used by another image or character."
+        } else null
         if (error != null) return error
         val saved = character.copy(name = name)
-        edit { st ->
+        edit(ws) { st ->
             val exists = st.characters.any { it.id == saved.id }
             st.copy(
                 characters = if (exists) st.characters.map { if (it.id == saved.id) saved else it } else st.characters + saved,
                 offerCharacter = false,
             )
         }
-        if (toLibrary) saveToLibrary(saved)
+        if (toLibrary) saveToLibrary(saved, ws)
         return null
+    }
+
+    private fun characterError(character: Character, name: String): String? = when {
+        character.imageIds.isEmpty() -> "Choose at least one image of this character."
+        name.isEmpty() -> "Give the character a name."
+        !name.matches(Regex("[A-Za-z][A-Za-z0-9_]*")) ->
+            "Use one word for the name: letters, numbers and _ (it becomes @${name.filter { it.isLetterOrDigit() || it == '_' }})."
+        !character.hasClothing -> "Describe the clothing so it stays the same everywhere."
+        else -> null
     }
 
     // --- Character library -----------------------------------------------------------
@@ -197,18 +222,43 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Saves (or updates) [character] in the library with copies of its images and all descriptions. */
-    fun saveToLibrary(character: Character) = viewModelScope.launch {
-        val s = _state.value
+    fun saveToLibrary(character: Character, ws: Workspace = Workspace.VIDEO) = viewModelScope.launch {
+        val s = flow(ws).value
         val uris = buildList {
             if (Character.START_FRAME_IMAGE_ID in character.imageIds) s.startFrame?.let { add(Uri.parse(it)) }
             s.references.filter { it.id in character.imageIds }.forEach { add(Uri.parse(it.uri)) }
         }
+        val savedId = character.savedId ?: nextId++
+        storeInLibrary(character, savedId, uris)?.let { saved ->
+            flow(ws).update { st ->
+                st.copy(characters = st.characters.map { if (it.id == character.id) it.copy(savedId = saved.id) else it })
+            }
+        }
+    }
+
+    /**
+     * Creates or edits a character directly in the library (the Characters
+     * screen). [images] are every image shown in the editor; the character keeps
+     * the ones it has selected. Returns an error message, or null when saving starts.
+     */
+    fun saveLibraryCharacter(character: Character, images: List<CharacterImageOption>): String? {
+        val name = character.name.trim()
+        characterError(character, name)?.let { return it }
+        if (savedCharacters.value.any { it.id != character.savedId && it.name.equals(name, ignoreCase = true) }) {
+            return "You already have a saved character called $name."
+        }
+        val uris = images.filter { it.id in character.imageIds }.map { Uri.parse(it.uri) }
+        val savedId = character.savedId ?: nextId++
+        viewModelScope.launch { storeInLibrary(character.copy(name = name), savedId, uris) }
+        return null
+    }
+
+    private suspend fun storeInLibrary(character: Character, savedId: Long, uris: List<Uri>): SavedCharacter? {
         if (uris.isEmpty()) {
             _libraryMessage.value = "${character.name} has no images to save."
-            return@launch
+            return null
         }
-        val savedId = character.savedId ?: nextId++
-        try {
+        return try {
             val paths = library.storeImages(savedId, uris)
             val saved = SavedCharacter(
                 id = savedId,
@@ -225,19 +275,18 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
             repo.updateSavedCharacters { list ->
                 if (list.any { it.id == savedId }) list.map { if (it.id == savedId) saved else it } else list + saved
             }
-            _state.update { st ->
-                st.copy(characters = st.characters.map { if (it.id == character.id) it.copy(savedId = savedId) else it })
-            }
             _libraryMessage.value = "Saved ${character.name} (${paths.size} image${if (paths.size == 1) "" else "s"}) to your library."
+            saved
         } catch (e: Exception) {
             _libraryMessage.value = "Couldn't save ${character.name}: ${e.message}"
+            null
         }
     }
 
-    /** Adds a saved character to this video: its images become references and the character is recreated. */
-    fun loadSavedCharacter(saved: SavedCharacter): String? {
-        val s = _state.value
-        if (s.characters.any { it.savedId == saved.id }) return "${saved.name} is already in this video."
+    /** Adds a saved character: its images become references and the character is recreated. */
+    fun loadSavedCharacter(saved: SavedCharacter, ws: Workspace = Workspace.VIDEO): String? {
+        val s = flow(ws).value
+        if (s.characters.any { it.savedId == saved.id }) return "${saved.name} is already added."
         val files = saved.imagePaths.map(::File).filter { it.exists() }
         if (files.isEmpty()) return "${saved.name}'s images are missing. Delete and save the character again."
         val free = s.maxReferences - s.references.size
@@ -246,7 +295,7 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
         }
         val tag = saved.name.lowercase()
         val taken = (s.references.map { it.tag.lowercase() } + PromptBuilder.START_FRAME_TAG + s.characters.map { it.tag }).toMutableSet()
-        if (tag in taken) return "Something called @${saved.name} is already in this video. Rename or remove it first."
+        if (tag in taken) return "Something called @${saved.name} is already added. Rename or remove it first."
         taken += tag
         val refs = files.map { file ->
             var n = 1
@@ -266,7 +315,7 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
             features = saved.features,
             savedId = saved.id,
         )
-        edit { st ->
+        edit(ws) { st ->
             st.copy(
                 references = st.references + refs,
                 characters = st.characters + character,
@@ -280,10 +329,10 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * Adds several saved characters in one go. Checks up front that they all fit,
-     * so the video isn't left with only some of them.
+     * so you aren't left with only some of them.
      */
-    fun loadSavedCharacters(saved: List<SavedCharacter>): String? {
-        val s = _state.value
+    fun loadSavedCharacters(saved: List<SavedCharacter>, ws: Workspace = Workspace.VIDEO): String? {
+        val s = flow(ws).value
         val needed = saved.sumOf { c -> c.imagePaths.count { File(it).exists() } }
         val free = s.maxReferences - s.references.size
         if (needed > free) {
@@ -291,27 +340,110 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
         }
         val names = saved.map { it.name.lowercase() }
         if (names.size != names.toSet().size) return "Two of the selected characters have the same name."
-        saved.forEach { c -> loadSavedCharacter(c)?.let { return it } }
-        _libraryMessage.value = if (saved.size == 1) _libraryMessage.value else "Added ${saved.joinToString { it.name }}."
+        saved.forEach { c -> loadSavedCharacter(c, ws)?.let { return it } }
+        if (saved.size > 1) _libraryMessage.value = "Added ${saved.joinToString { it.name }}."
         return null
     }
 
     fun deleteSavedCharacter(saved: SavedCharacter) = viewModelScope.launch {
         library.delete(saved.id)
         repo.updateSavedCharacters { list -> list.filterNot { it.id == saved.id } }
-        _state.update { st ->
-            st.copy(characters = st.characters.map { if (it.savedId == saved.id) it.copy(savedId = null) else it })
+        Workspace.entries.forEach { ws ->
+            flow(ws).update { st ->
+                st.copy(characters = st.characters.map { if (it.savedId == saved.id) it.copy(savedId = null) else it })
+            }
         }
         _libraryMessage.value = "Deleted ${saved.name} from your library."
     }
 
-    fun removeCharacter(id: Long) = edit { s -> s.copy(characters = s.characters.filterNot { it.id == id }) }
+    fun removeCharacter(id: Long, ws: Workspace = Workspace.VIDEO) = edit(ws) { s -> s.copy(characters = s.characters.filterNot { it.id == id }) }
 
     private fun CreateState.offerCharacterIfNew() =
         if (characterOffered || characters.isNotEmpty()) this else copy(offerCharacter = true, characterOffered = true)
 
     private fun CreateState.withoutCharacterImage(imageId: Long) =
         copy(characters = characters.map { c -> c.copy(imageIds = c.imageIds - imageId) })
+
+    // --- Image generation -------------------------------------------------------------
+
+    /** Returns an error message if the image workspace can't be submitted. */
+    fun validateImage(): String? {
+        val s = _imageState.value
+        val cfg = settings.value
+        if (cfg.serverUrl.isBlank() || cfg.appToken.isBlank()) return "Set the server URL and app token in Settings first."
+        if (s.scene.isBlank()) return "Describe the image you want."
+        commonErrors(s, imagePrompt.value)?.let { return it }
+        if (imagePrompt.value.text.length > 5000) return "The prompt is over Wan's 5000-character limit. Shorten it."
+        return null
+    }
+
+    /**
+     * Generates a Wan image through SpicyAPI. The server picks the model:
+     * reference images (uploads or characters) → image edit; none → text-to-image.
+     */
+    fun generateImage() {
+        validateImage()?.let { msg -> _imageState.update { it.copy(message = msg) }; return }
+        val s = _imageState.value
+        val cfg = settings.value
+        val promptText = imagePrompt.value.text
+        // 4K only exists for prompt-only images; with references the canvas is 2K.
+        val resolution = if (s.references.isEmpty()) s.imageResolution else "2k"
+        _imageState.update { it.copy(submitting = true, message = null) }
+        viewModelScope.launch {
+            try {
+                val task = api.submitImage(
+                    baseUrl = cfg.serverUrl,
+                    token = cfg.appToken,
+                    request = ImageRequest(
+                        prompt = promptText,
+                        nsfw = s.nsfw,
+                        adultsConfirmed = s.nsfw && s.adultsConfirmed,
+                        resolution = resolution,
+                        aspectRatio = s.imageAspect,
+                        seed = s.seed.toLongOrNull(),
+                    ),
+                    references = s.references.map { Uri.parse(it.uri) },
+                )
+                val job = Job(
+                    id = task.id,
+                    createdAt = System.currentTimeMillis(),
+                    prompt = promptText,
+                    resolution = resolution.uppercase(),
+                    duration = 0,
+                    status = task.status.ifEmpty { "pending" },
+                    provider = task.provider,
+                    model = task.model,
+                    kind = "image",
+                )
+                repo.updateJobs { listOf(job) + it }
+                _imageState.update { it.copy(submitting = false, message = "Submitted! Your image will appear in History.") }
+                startPolling()
+            } catch (e: Exception) {
+                _imageState.update { it.copy(submitting = false, message = e.message ?: "Submission failed.") }
+            }
+        }
+    }
+
+    /** Checks shared by video and image submission. */
+    private fun commonErrors(s: CreateState, p: BuiltPrompt): String? {
+        val tags = s.references.map { it.tag.lowercase() }
+        if (tags.any { !it.matches(Regex("[a-z0-9_]+")) }) return "Reference tags may only contain letters, numbers and _."
+        if (tags.size != tags.toSet().size || "start" in tags) return "Each reference needs a unique tag (\"start\" is reserved)."
+        s.characters.firstOrNull { it.imageIds.isEmpty() }?.let {
+            return "${it.name} has no images left. Edit the character and choose at least one."
+        }
+        s.characters.firstOrNull { it.tag in tags }?.let {
+            return "@${it.tag} is used by both a reference image and a character. Rename one of them."
+        }
+        if (s.seed.isNotBlank() && s.seed.toLongOrNull() == null) return "Seed must be a whole number."
+        if (s.nsfw) {
+            if (!s.adultsConfirmed) return "Confirm that everyone depicted is a consenting adult (18+)."
+            Safety.findMinorReference(p.text)?.let {
+                return "NSFW prompts can't reference minors (found \"$it\"). Remove it or turn NSFW off."
+            }
+        }
+        return null
+    }
 
     // --- Shots ----------------------------------------------------------------
 
@@ -347,27 +479,10 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
     /** Returns an error message if the current input can't be submitted. */
     fun validate(): String? {
         val s = _state.value
-        val p = prompt.value
         val cfg = settings.value
         if (cfg.serverUrl.isBlank() || cfg.appToken.isBlank()) return "Set the server URL and app token in Settings first."
         if (s.scene.isBlank() && s.shots.all { it.description.isBlank() }) return "Describe the scene or at least one shot."
-        val tags = s.references.map { it.tag.lowercase() }
-        if (tags.any { !it.matches(Regex("[a-z0-9_]+")) }) return "Reference tags may only contain letters, numbers and _."
-        if (tags.size != tags.toSet().size || "start" in tags) return "Each reference needs a unique tag (\"start\" is reserved)."
-        s.characters.firstOrNull { it.imageIds.isEmpty() }?.let {
-            return "${it.name} has no images left. Edit the character and choose at least one."
-        }
-        s.characters.firstOrNull { it.tag in tags }?.let {
-            return "@${it.tag} is used by both a reference image and a character. Rename one of them."
-        }
-        if (s.seed.isNotBlank() && s.seed.toLongOrNull() == null) return "Seed must be a whole number."
-        if (s.nsfw) {
-            if (!s.adultsConfirmed) return "Confirm that everyone depicted is a consenting adult (18+)."
-            Safety.findMinorReference(p.text)?.let {
-                return "NSFW prompts can't reference minors (found \"$it\"). Remove it or turn NSFW off."
-            }
-        }
-        return null
+        return commonErrors(s, prompt.value)
     }
 
     fun generate() {
@@ -501,9 +616,16 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 val url = freshVideoUrl(job).getOrThrow()
-                val frame = frameExtractor.lastFrame(url, name = job.id.takeLast(12).replace(Regex("[^A-Za-z0-9_-]"), "_"))
+                val name = job.id.takeLast(12).replace(Regex("[^A-Za-z0-9_-]"), "_")
+                // Images are used as-is; videos contribute their final frame.
+                val frame = if (job.isImage) frameExtractor.saveImage(url, name) else frameExtractor.lastFrame(url, name)
                 setStartFrame(Uri.fromFile(frame))
-                _state.update { it.copy(message = "Start frame set from the last frame of that video. Describe what happens next.") }
+                _state.update {
+                    it.copy(
+                        message = if (job.isImage) "Start frame set from that image. Describe what happens next."
+                        else "Start frame set from the last frame of that video. Describe what happens next.",
+                    )
+                }
                 onReady()
             } catch (e: Exception) {
                 _historyMessage.value = "Couldn't use the last frame: ${e.message}"
@@ -601,6 +723,7 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
             prompt = base.prompt.ifBlank { task.prompt.orEmpty() },
             resolution = base.resolution.ifBlank { task.resolution.orEmpty() },
             duration = if (base.duration > 0) base.duration else task.duration?.toInt() ?: 0,
+            kind = task.kind ?: base.kind,
         )
     }
 

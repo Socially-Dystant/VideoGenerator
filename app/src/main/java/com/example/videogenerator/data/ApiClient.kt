@@ -31,6 +31,8 @@ data class TaskResponse(
     val billedSeconds: Double? = null,
     /** "ofox" or "spicy". */
     val provider: String? = null,
+    /** "video" or "image". */
+    val kind: String? = null,
     val model: String? = null,
     val prompt: String? = null,
     val resolution: String? = null,
@@ -102,6 +104,17 @@ data class ProviderBalance(
 @Serializable
 data class Balances(val ofox: ProviderBalance = ProviderBalance(), val spicy: ProviderBalance = ProviderBalance())
 
+@Serializable
+data class ImageRequest(
+    val prompt: String,
+    val nsfw: Boolean,
+    val adultsConfirmed: Boolean,
+    /** "2k" or "4k". */
+    val resolution: String,
+    val aspectRatio: String,
+    val seed: Long? = null,
+)
+
 class ApiException(message: String) : IOException(message)
 
 /** Talks to our Render server, which holds the Ofox key. */
@@ -130,6 +143,17 @@ class ApiClient(private val context: Context) {
         }
         execute(Request.Builder().url("$baseUrl/api/videos").post(body.build()), token)
     }
+
+    /** Wan image through SpicyAPI; the server picks text-to-image or edit from [references]. */
+    suspend fun submitImage(baseUrl: String, token: String, request: ImageRequest, references: List<Uri>): TaskResponse =
+        withContext(Dispatchers.IO) {
+            val body = MultipartBody.Builder().setType(MultipartBody.FORM)
+                .addFormDataPart("payload", json.encodeToString(ImageRequest.serializer(), request))
+            references.forEachIndexed { i, uri ->
+                body.addFormDataPart("references", "ref$i.jpg", compress(uri).toRequestBody(JPEG))
+            }
+            execute(Request.Builder().url("$baseUrl/api/images").post(body.build()), token)
+        }
 
     suspend fun status(baseUrl: String, token: String, id: String): TaskResponse = withContext(Dispatchers.IO) {
         execute(Request.Builder().url("$baseUrl/api/videos/$id").get(), token)

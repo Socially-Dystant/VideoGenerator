@@ -29,6 +29,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -58,6 +60,10 @@ fun CharacterEditorDialog(
     onSave: (Character, Boolean) -> String?,
     /** When set, a "Save & add another" button saves and starts a fresh character. */
     onCreateAnother: (() -> Character)? = null,
+    /** False on the Characters screen, where everything is saved to the library anyway. */
+    showLibraryOption: Boolean = true,
+    /** When set, step 1 shows an "Add photos" button; newly added photos start selected. */
+    onAddImages: (() -> Unit)? = null,
     onDismiss: () -> Unit,
 ) {
     var c by remember(initial.id) { mutableStateOf(initial) }
@@ -65,6 +71,14 @@ fun CharacterEditorDialog(
     var savedCount by remember { mutableStateOf(0) }
     // Characters that came from the library stay in sync with it by default.
     var saveToLibrary by remember(initial.id) { mutableStateOf(initial.savedId != null) }
+    var seenImages by remember(initial.id) { mutableStateOf(images.map { it.id }.toSet()) }
+    LaunchedEffect(images) {
+        val added = images.map { it.id }.filterNot { it in seenImages }
+        if (added.isNotEmpty()) {
+            c = c.copy(imageIds = c.imageIds + added)
+            seenImages = seenImages + added
+        }
+    }
 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
@@ -89,8 +103,11 @@ fun CharacterEditorDialog(
                         "Pick every upload that shows this person. Several angles (face close-up, full body) give the closest match.",
                         style = MaterialTheme.typography.bodySmall,
                     )
-                    if (images.isEmpty()) {
+                    if (images.isEmpty() && onAddImages == null) {
                         Text("Add reference images or a start frame first.", color = MaterialTheme.colorScheme.error)
+                    }
+                    onAddImages?.let { add ->
+                        OutlinedButton(onClick = add) { Text(if (images.isEmpty()) "Choose photos" else "Add photos") }
                     }
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         images.forEach { img ->
@@ -157,6 +174,7 @@ fun CharacterEditorDialog(
                     }
                 }
 
+                if (showLibraryOption) {
                 Row(
                     Modifier
                         .fillMaxWidth()
@@ -170,6 +188,7 @@ fun CharacterEditorDialog(
                         else "Save to my character library (keeps the images and descriptions)",
                         style = MaterialTheme.typography.bodyMedium,
                     )
+                }
                 }
                 if (savedCount > 0 && error == null) {
                     Text(

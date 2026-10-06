@@ -21,6 +21,7 @@ const config = {
   spicyApiKey: process.env.SPICY_API_KEY,
   spicyBaseUrl: (process.env.SPICY_BASE_URL || 'https://api.spicyapi.ai').replace(/\/$/, ''),
   spicyModelBase: process.env.SPICY_MODEL_BASE || 'alibaba/wan-3.0-prime',
+  spicyImageModelBase: process.env.SPICY_IMAGE_MODEL_BASE || 'alibaba/wan-2.7-pro',
   // Render sets RENDER_EXTERNAL_URL automatically. Without a public URL the
   // images are sent inline as data URIs instead.
   publicBaseUrl: (process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/$/, ''),
@@ -37,7 +38,12 @@ if (!config.appToken) {
 }
 
 const spicy = config.spicyApiKey
-  ? new SpicyClient({ apiKey: config.spicyApiKey, baseUrl: config.spicyBaseUrl, modelBase: config.spicyModelBase })
+  ? new SpicyClient({
+      apiKey: config.spicyApiKey,
+      baseUrl: config.spicyBaseUrl,
+      modelBase: config.spicyModelBase,
+      imageModelBase: config.spicyImageModelBase,
+    })
   : null;
 if (!spicy) console.warn('SPICY_API_KEY is not set; NSFW requests will be rejected.');
 
@@ -311,6 +317,68 @@ app.get('/api/videos/recent', requireAppToken, async (req, res) => {
   const [spicyList, ofoxList] = await Promise.all([spicyJobs, ofoxJobs]);
   res.json({ spicy: spicyList, ofox: ofoxList.jobs, ofoxListed: ofoxList.listed, notes });
 });
+
+const IMAGE_ASPECT_RATIOS = ['1:1', '4:3', '3:4', '16:9', '9:16', '3:2', '2:3'];
+
+// Wan image generation through SpicyAPI, with the same content rules as video.
+app.post(
+  '/api/images',
+  requireAppToken,
+  upload.fields([{ name: 'references', maxCount: MAX_REFERENCE_IMAGES }]),
+  async (req, res) => {
+    if (!spicy) return res.status(503).json({ error: 'Image generation needs SPICY_API_KEY on the server.' });
+    let payload;
+    try {
+      payload = JSON.parse(req.body.payload || '{}');
+    } catch {
+      return res.status(400).json({ error: 'payload must be JSON.' });
+    }
+    let prompt = typeof payload.prompt === 'string' ? payload.prompt.trim() : '';
+    const references = req.files?.references ?? [];
+    const aspectRatio = payload.aspectRatio ?? '1:1';
+    const seed = payload.seed == null || payload.seed === '' ? null : Number(payload.seed);
+    const errors = [];
+    if (!prompt) errors.push('prompt is required');
+    if (prompt.length > 5000) errors.push('prompt must be 5000 characters or fewer');
+    if (!IMAGE_ASPECT_RATIOS.includes(aspectRatio)) errors.push(`aspectRatio must be one of ${IMAGE_ASPECT_RATIOS.join(', ')}`);
+    if (!['2k', '4k'].includes(payload.resolution ?? '2k')) errors.push('resolution must be 2k or 4k');
+    if (seed !== null && !Number.isInteger(seed)) errors.push('seed must be an integer');
+    if (errors.length) return res.status(400).json({ error: errors.join('; ') });
+
+    if (payload.nsfw === true) {
+      if (payload.adultsConfirmed !== true) {
+        return res.status(422).json({ error: 'NSFW mode requires confirming that everyone depicted is an adult (18+) who consented.' });
+      }
+      const hit = findMinorReference(prompt);
+      if (hit) return res.status(422).json({ error: `NSFW requests may not reference minors (matched "${hit}").` });
+      const verdict = await checkImagesForMinors({
+        images: references,
+        apiKey: config.ofoxApiKey,
+        baseUrl: config.ofoxBaseUrl,
+        model: config.ageCheckModel,
+      });
+      if (!verdict.ok) return res.status(422).json({ error: verdict.reason });
+      if (!prompt.includes(NSFW_DIRECTIVE)) prompt += `\n\n${NSFW_DIRECTIVE}`;
+    } else if (!prompt.includes(SFW_DIRECTIVE)) {
+      prompt += `\n\n${SFW_DIRECTIVE}`;
+    }
+
+    try {
+      const task = spicy.buildImageTask({
+        prompt,
+        referenceUris: await Promise.all(references.map((f) => spicy.upload(f))),
+        resolution: payload.resolution,
+        aspectRatio,
+        seed,
+      });
+      const created = await spicy.createTask(task);
+      console.log(`Created ${created.id} (${task.model}, ${references.length} reference image(s))`);
+      res.status(202).json({ ...created, kind: 'image' });
+    } catch (err) {
+      res.status(err.status || 502).json({ error: `SpicyAPI: ${err.message}` });
+    }
+  },
+);
 
 app.get('/api/videos/:id', requireAppToken, async (req, res) => {
   if (isSpicyId(req.params.id)) {

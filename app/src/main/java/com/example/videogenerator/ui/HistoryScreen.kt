@@ -42,6 +42,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
+import coil.compose.AsyncImage
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -190,7 +192,7 @@ private fun JobCard(
     OutlinedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                AssistChip(onClick = {}, label = { Text(job.status + if (job.isSpicy) " · NSFW" else "") })
+                AssistChip(onClick = {}, label = { Text((if (job.isImage) "Image · " else "") + job.status + if (job.isSpicy && !job.isImage) " · NSFW" else "") })
                 Spacer(Modifier.width(8.dp))
                 Text(
                     listOfNotNull(
@@ -214,12 +216,20 @@ private fun JobCard(
                 )
             } else {
                 Text(
-                    "Prompt not available: this video was imported by Refresh and ${job.providerLabel} doesn't return prompts.",
+                    "Prompt not available: this was imported by Refresh and ${job.providerLabel} doesn't return prompts.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            playUrl?.let { url ->
+            playUrl?.takeIf { job.isImage }?.let { url ->
+                AsyncImage(
+                    model = url,
+                    contentDescription = "Generated image",
+                    contentScale = ContentScale.FillWidth,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            playUrl?.takeUnless { job.isImage }?.let { url ->
                 AndroidView(
                     factory = { ctx ->
                         VideoView(ctx).apply {
@@ -236,7 +246,7 @@ private fun JobCard(
                 if (job.hasPrompt) TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "Less" else "Full prompt") }
                 if (job.videoUrl != null) {
                     TextButton(onClick = { if (playUrl != null) playUrl = null else withUrl { playUrl = it } }) {
-                        Text(if (playUrl != null) "Hide" else "Play")
+                        Text(if (playUrl != null) "Hide" else if (job.isImage) "View" else "Play")
                     }
                     TextButton(onClick = { withUrl { download(context, job, it) } }) { Text("Save") }
                     if (job.status == "completed") {
@@ -245,7 +255,7 @@ private fun JobCard(
                                 CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
                                 Spacer(Modifier.width(6.dp))
                             }
-                            Text("Continue from last frame")
+                            Text(if (job.isImage) "Use as video start frame" else "Continue from last frame")
                         }
                     }
                     TextButton(onClick = {
@@ -279,11 +289,15 @@ private fun JobDetails(job: Job) {
 }
 
 private fun download(context: Context, job: Job, url: String) {
+    val name = "videogen-${job.id.takeLast(8)}"
     val request = DownloadManager.Request(Uri.parse(url))
-        .setTitle("Generated video")
-        .setMimeType("video/mp4")
+        .setTitle(if (job.isImage) "Generated image" else "Generated video")
+        .setMimeType(if (job.isImage) "image/png" else "video/mp4")
         .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-        .setDestinationInExternalPublicDir(Environment.DIRECTORY_MOVIES, "videogen-${job.id.takeLast(8)}.mp4")
+        .apply {
+            if (job.isImage) setDestinationInExternalPublicDir(Environment.DIRECTORY_PICTURES, "$name.png")
+            else setDestinationInExternalPublicDir(Environment.DIRECTORY_MOVIES, "$name.mp4")
+        }
     context.getSystemService(DownloadManager::class.java).enqueue(request)
-    Toast.makeText(context, "Saving to Movies…", Toast.LENGTH_SHORT).show()
+    Toast.makeText(context, if (job.isImage) "Saving to Pictures…" else "Saving to Movies…", Toast.LENGTH_SHORT).show()
 }

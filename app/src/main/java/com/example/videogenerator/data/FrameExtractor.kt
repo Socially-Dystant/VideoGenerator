@@ -33,6 +33,18 @@ class FrameExtractor(private val context: Context) {
         out
     }
 
+    /** Saves a generated image so it can be used as a video's start frame. */
+    suspend fun saveImage(url: String, name: String): File = withContext(Dispatchers.IO) {
+        frames.mkdirs()
+        val out = File(frames, "$name-${System.currentTimeMillis()}.png")
+        http.newCall(Request.Builder().url(url).build()).execute().use { res ->
+            if (!res.isSuccessful) throw IOException("Couldn't download the image (HTTP ${res.code}).")
+            out.outputStream().use { res.body!!.byteStream().copyTo(it) }
+        }
+        prune()
+        out
+    }
+
     private fun downloadThenGrab(url: String, offsetMs: Long): Bitmap {
         val tmp = File.createTempFile("video", ".mp4", context.cacheDir)
         try {

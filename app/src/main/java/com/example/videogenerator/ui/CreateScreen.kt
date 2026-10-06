@@ -96,63 +96,8 @@ fun CreateScreen(vm: GeneratorViewModel, modifier: Modifier = Modifier) {
     val pickStart = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) vm.setStartFrame(uri)
     }
-    val pickRefs = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(9)) { uris ->
-        if (uris.isNotEmpty()) vm.addReferences(uris)
-    }
     val imagesOnly = PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
     val tagNames = prompt.tagMap.keys.toList()
-    var editingCharacter by remember { mutableStateOf<Character?>(null) }
-    var showLibrary by remember { mutableStateOf(false) }
-    val savedCharacters by vm.savedCharacters.collectAsState()
-    val libraryMessage by vm.libraryMessage.collectAsState()
-
-    val characterImages = buildList {
-        state.startFrame?.let { add(CharacterImageOption(Character.START_FRAME_IMAGE_ID, it, "@start")) }
-        state.references.forEach { add(CharacterImageOption(it.id, it.uri, "@${it.tag}")) }
-    }
-
-    if (state.offerCharacter) {
-        AlertDialog(
-            onDismissRequest = vm::dismissCharacterOffer,
-            icon = { Icon(Icons.Default.Person, null) },
-            title = { Text("Create a character?") },
-            text = {
-                Text(
-                    "Turn the person in these images into a named character. The prompt will lock their appearance " +
-                        "and clothing so they look the same in every shot.",
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    vm.dismissCharacterOffer()
-                    editingCharacter = vm.newCharacter()
-                }) { Text("Create character") }
-            },
-            dismissButton = { TextButton(onClick = vm::dismissCharacterOffer) { Text("Not now") } },
-        )
-    }
-
-    editingCharacter?.let { character ->
-        CharacterEditorDialog(
-            initial = character,
-            isNew = state.characters.none { it.id == character.id },
-            images = characterImages,
-            onSave = vm::saveCharacter,
-            onCreateAnother = vm::newCharacter,
-            onDismiss = { editingCharacter = null },
-        )
-    }
-
-    if (showLibrary) {
-        SavedCharactersDialog(
-            saved = savedCharacters,
-            alreadyAdded = state.characters.mapNotNull { it.savedId }.toSet(),
-            onAdd = vm::loadSavedCharacters,
-            onDelete = { vm.deleteSavedCharacter(it) },
-            onDismiss = { showLibrary = false },
-        )
-    }
-
     Column(
         modifier
             .verticalScroll(rememberScrollState())
@@ -180,106 +125,7 @@ fun CreateScreen(vm: GeneratorViewModel, modifier: Modifier = Modifier) {
             }
         }
 
-        // --- Reference images ----------------------------------------------------------
-        Section(
-            "Reference images (${state.references.size}/${state.maxReferences})",
-            "Characters, objects, outfits or locations to keep consistent. Mention them in your text with their @tag.",
-        ) {
-            state.references.forEach { ref ->
-                OutlinedCard(Modifier.fillMaxWidth()) {
-                    Row(Modifier.padding(8.dp), verticalAlignment = Alignment.Top) {
-                        Thumbnail(ref.uri, Modifier.size(80.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Column(Modifier.weight(1f)) {
-                            OutlinedTextField(
-                                value = ref.tag,
-                                onValueChange = { v -> vm.updateReference(ref.id) { it.copy(tag = v.filter { c -> c.isLetterOrDigit() || c == '_' }) } },
-                                label = { Text("Tag") },
-                                prefix = { Text("@") },
-                                supportingText = { prompt.tagMap["@${ref.tag.lowercase()}"]?.let { Text("→ $it") } },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                            OutlinedTextField(
-                                value = ref.note,
-                                onValueChange = { v -> vm.updateReference(ref.id) { it.copy(note = v) } },
-                                label = { Text("What is this? (optional)") },
-                                placeholder = { Text("e.g. the woman in the red coat") },
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                        }
-                        IconButton(onClick = { vm.removeReference(ref.id) }) { Icon(Icons.Default.Close, "Remove reference") }
-                    }
-                }
-            }
-            if (state.references.size < state.maxReferences) {
-                OutlinedButton(onClick = { pickRefs.launch(imagesOnly) }) {
-                    Icon(Icons.Default.Add, null); Spacer(Modifier.width(8.dp)); Text("Add reference images")
-                }
-            }
-        }
-
-        // --- Characters ---------------------------------------------------------------------
-        Section(
-            "Characters",
-            "Lock a person's look and outfit across every shot. Refer to them as @Name in the scene and shots.",
-        ) {
-            state.characters.forEach { character ->
-                OutlinedCard(Modifier.fillMaxWidth()) {
-                    Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        characterImages.firstOrNull { it.id in character.imageIds }?.let { Thumbnail(it.uri, Modifier.size(56.dp)) }
-                        Spacer(Modifier.width(10.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text("@${character.name}", style = MaterialTheme.typography.titleSmall)
-                            Text(
-                                prompt.characterImages[character.tag].orEmpty().joinToString(", "),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.secondary,
-                            )
-                            Text(
-                                listOf(character.top, character.bottom, character.footwear).filter { it.isNotBlank() }.joinToString(" · "),
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 2,
-                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                            )
-                        }
-                        IconButton(onClick = { vm.saveToLibrary(character) }) {
-                            if (character.savedId != null) {
-                                Icon(Icons.Default.Favorite, "Update saved character", tint = MaterialTheme.colorScheme.primary)
-                            } else {
-                                Icon(Icons.Default.FavoriteBorder, "Save character to library")
-                            }
-                        }
-                        IconButton(onClick = { editingCharacter = character }) { Icon(Icons.Default.Edit, "Edit character") }
-                        IconButton(onClick = { vm.removeCharacter(character.id) }) { Icon(Icons.Default.Delete, "Delete character") }
-                    }
-                }
-            }
-            libraryMessage?.let { msg ->
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(msg, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f))
-                    TextButton(onClick = vm::dismissLibraryMessage) { Text("OK") }
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(
-                    onClick = { editingCharacter = vm.newCharacter() },
-                    enabled = characterImages.isNotEmpty(),
-                ) {
-                    Icon(Icons.Default.Person, null); Spacer(Modifier.width(6.dp)); Text("Create", maxLines = 1)
-                }
-                OutlinedButton(onClick = { showLibrary = true }) {
-                    Icon(Icons.Default.Favorite, null); Spacer(Modifier.width(6.dp))
-                    Text("Saved (${savedCharacters.size})", maxLines = 1)
-                }
-            }
-            if (characterImages.isEmpty()) {
-                Text(
-                    "Add a start frame or reference images to create a character, or add one from Saved.",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-        }
+        ReferenceAndCharacterSections(vm, Workspace.VIDEO, state, prompt, noun = "shot")
 
         // --- Scene ---------------------------------------------------------------------------
         Section("Scene description", "Setting, characters, mood, lighting, style.") {
@@ -442,7 +288,7 @@ private fun ShotCard(
 }
 
 @Composable
-private fun PromptPreview(prompt: BuiltPrompt, context: Context) {
+internal fun PromptPreview(prompt: BuiltPrompt, context: Context) {
     Section("Prompt preview", "Exactly what is sent to Ofox. @tags are replaced with the model's image labels.") {
         if (prompt.tagMap.isNotEmpty()) {
             Text(
@@ -512,7 +358,7 @@ fun Section(title: String, subtitle: String? = null, content: @Composable () -> 
 }
 
 @Composable
-private fun Label(text: String) = Text(text, style = MaterialTheme.typography.labelLarge)
+internal fun Label(text: String) = Text(text, style = MaterialTheme.typography.labelLarge)
 
 @Composable
 fun SwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
@@ -524,7 +370,7 @@ fun SwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun <T> ChipRow(options: List<T>, selected: T, label: (T) -> String, onSelect: (T) -> Unit) {
+internal fun <T> ChipRow(options: List<T>, selected: T, label: (T) -> String, onSelect: (T) -> Unit) {
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         options.forEach { option ->
             FilterChip(selected = option == selected, onClick = { onSelect(option) }, label = { Text(label(option)) })

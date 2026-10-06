@@ -123,7 +123,11 @@ data class Job(
     val model: String? = null,
     val completedAt: Long? = null,
     val billedSeconds: Double? = null,
+    /** "video" or "image". */
+    val kind: String = "video",
 ) {
+    val isImage: Boolean get() = kind == "image"
+
     /** Empty for jobs imported by Refresh that weren't created from this app. */
     val hasPrompt: Boolean get() = prompt.isNotBlank()
     val providerLabel: String get() = if (isSpicy || provider == "spicy") "SpicyAPI" else "Ofox"

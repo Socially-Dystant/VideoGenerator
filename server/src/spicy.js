@@ -15,10 +15,11 @@ const STATE_TO_STATUS = {
 };
 
 class SpicyClient {
-  constructor({ apiKey, baseUrl, modelBase }) {
+  constructor({ apiKey, baseUrl, modelBase, imageModelBase = 'alibaba/wan-2.7-pro' }) {
     this.apiKey = apiKey;
     this.baseUrl = baseUrl;
     this.modelBase = modelBase;
+    this.imageModelBase = imageModelBase;
   }
 
   async call(path, init = {}) {
@@ -112,7 +113,7 @@ class SpicyClient {
   async getTask(id) {
     const data = await this.call(`/jobs/recordInfo?taskId=${encodeURIComponent(id.slice(ID_PREFIX.length))}`);
     const assets = data.output?.assets ?? [];
-    const video = assets.find((a) => a.mime?.startsWith('video/')) ?? assets[0];
+    const video = assets.find((a) => a.mime?.startsWith('video/')) ?? assets.find((a) => a.mime?.startsWith('image/')) ?? assets[0];
     const videoUrl = video?.url || data.output?.video_url || data.output?.url || null;
     const status = STATE_TO_STATUS[data.state] || data.state;
 
@@ -136,6 +137,7 @@ class SpicyClient {
       id,
       provider: 'spicy',
       model: data.model ?? null,
+      kind: kindOf(data.model),
       status,
       videoUrl,
       videoNote,
@@ -155,7 +157,7 @@ class SpicyClient {
   async listRecent(limit) {
     const page = await this.call('/jobs?limit=100');
     const items = (page.items ?? page ?? [])
-      .filter((item) => !item.model || item.model.startsWith(this.modelBase))
+      .filter((item) => this.isOurModel(item.model))
       .filter((item) => item.contentState !== 'purged')
       .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
       .slice(0, limit);
@@ -199,7 +201,7 @@ SpicyClient.prototype.listAll = async function listAll() {
     if (cursor) query.set('cursor', cursor);
     const page = await this.call(`/jobs?${query}`);
     const items = page.items ?? [];
-    jobs.push(...items.filter((item) => !item.model || item.model.startsWith(this.modelBase)));
+    jobs.push(...items.filter((item) => this.isOurModel(item.model)));
     cursor = page.nextCursor ?? page.cursor ?? null;
     if (!cursor || items.length === 0) break;
   }
@@ -208,6 +210,32 @@ SpicyClient.prototype.listAll = async function listAll() {
 
 const TERMINAL_STATES = new Set(['succeeded', 'failed', 'canceled', 'cancelled', 'expired']);
 
+/** Video jobs vs Wan image jobs, from the model id. */
+function kindOf(model) {
+  return model && /\/(text-to-image|edit)$/.test(model) ? 'image' : 'video';
+}
+
+/** Jobs this app makes: Wan video (modelBase) and Wan image (imageModelBase). */
+SpicyClient.prototype.isOurModel = function isOurModel(model) {
+  return !model || model.startsWith(this.modelBase) || model.startsWith(this.imageModelBase);
+};
+
+/**
+ * Wan 2.7 image task: reference images → /edit (up to 9 images, 2K canvas),
+ * prompt only → /text-to-image (2K or 4K).
+ */
+SpicyClient.prototype.buildImageTask = function buildImageTask({ prompt, referenceUris, resolution, aspectRatio, seed }) {
+  const input = { prompt };
+  if (aspectRatio) input.aspect_ratio = aspectRatio;
+  if (Number.isInteger(seed)) input.seed = seed;
+  if (referenceUris.length > 0) {
+    input.image_urls = referenceUris;
+    return { model: `${this.imageModelBase}/edit`, input };
+  }
+  input.resolution = resolution === '4k' ? '4k' : '2k';
+  return { model: `${this.imageModelBase}/text-to-image`, input };
+};
+
 const isSpicyId = (id) => id.startsWith(ID_PREFIX);
 
-module.exports = { SpicyClient, isSpicyId, TERMINAL_STATES, ID_PREFIX };
+module.exports = { SpicyClient, isSpicyId, TERMINAL_STATES, ID_PREFIX, kindOf };
