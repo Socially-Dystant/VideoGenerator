@@ -39,6 +39,8 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
@@ -61,6 +63,7 @@ import com.example.videogenerator.ui.HistoryScreen
 import com.example.videogenerator.ui.HomeParchment
 import com.example.videogenerator.ui.HomeScreen
 import com.example.videogenerator.ui.ImageScreen
+import com.example.videogenerator.ui.ProcessingBar
 import com.example.videogenerator.ui.InstructionsScreen
 import com.example.videogenerator.ui.SettingsScreen
 import com.example.videogenerator.ui.theme.VideoGeneratorTheme
@@ -89,6 +92,10 @@ class MainActivity : ComponentActivity() {
                 val drawer = rememberDrawerState(DrawerValue.Closed)
                 val scope = rememberCoroutineScope()
                 val onHome = screen == Screen.HOME
+                val jobs by vm.jobs.collectAsState()
+
+                // A submitted video or image sends you Home; the bar below tracks it.
+                LaunchedEffect(Unit) { vm.submitted.collect { screen = Screen.HOME } }
 
                 // Back returns to Home before leaving the app.
                 BackHandler(enabled = drawer.isOpen || !onHome) {
@@ -119,6 +126,9 @@ class MainActivity : ComponentActivity() {
                     Scaffold(
                         modifier = Modifier.fillMaxSize(),
                         containerColor = if (onHome) HomeParchment else MaterialTheme.colorScheme.background,
+                        bottomBar = {
+                            if (screen != Screen.HISTORY) ProcessingBar(jobs) { screen = Screen.HISTORY }
+                        },
                         topBar = {
                             TopAppBar(
                                 navigationIcon = {

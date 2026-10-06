@@ -29,7 +29,10 @@ import com.example.videogenerator.prompt.Safety
 import java.io.File
 import kotlinx.coroutines.Job as CoroutineJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -93,6 +96,10 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
     private val draftJson = Json { ignoreUnknownKeys = true }
     private var nextId = System.currentTimeMillis()
     private var pollJob: CoroutineJob? = null
+
+    /** Fires after a video or image is accepted for processing; the UI returns to Home. */
+    private val _submitted = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val submitted: SharedFlow<Unit> = _submitted.asSharedFlow()
 
     private val _state = MutableStateFlow(CreateState())
     val state: StateFlow<CreateState> = _state.asStateFlow()
@@ -487,7 +494,8 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
                     kind = "image",
                 )
                 repo.updateJobs { listOf(job) + it }
-                _imageState.update { it.copy(submitting = false, message = "Submitted! Your image will appear in History.") }
+                _imageState.update { it.copy(submitting = false) }
+                _submitted.tryEmit(Unit)
                 startPolling()
             } catch (e: Exception) {
                 _imageState.update { it.copy(submitting = false, message = e.message ?: "Submission failed.") }
@@ -591,7 +599,8 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
                     model = task.model,
                 )
                 repo.updateJobs { listOf(job) + it }
-                _state.update { it.copy(submitting = false, message = "Submitted! Track progress in History.") }
+                _state.update { it.copy(submitting = false) }
+                _submitted.tryEmit(Unit)
                 startPolling()
             } catch (e: Exception) {
                 _state.update { it.copy(submitting = false, message = e.message ?: "Submission failed.") }
