@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.videogenerator.data.ApiClient
 import com.example.videogenerator.data.Balances
 import com.example.videogenerator.data.CharacterLibrary
+import com.example.videogenerator.data.DraftImages
 import com.example.videogenerator.data.FrameExtractor
 import com.example.videogenerator.data.GenerateRequest
 import com.example.videogenerator.data.ImageRequest
@@ -38,7 +39,14 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.drop
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
+import kotlinx.serialization.json.Json
 
+@Serializable
 data class CreateState(
     /** Scene description for video; the prompt for images. */
     val scene: String = "",
@@ -60,8 +68,9 @@ data class CreateState(
     val seed: String = "",
     val nsfw: Boolean = false,
     val adultsConfirmed: Boolean = false,
-    val submitting: Boolean = false,
-    val message: String? = null,
+    // Momentary UI state; not restored after the app is closed.
+    @Transient val submitting: Boolean = false,
+    @Transient val message: String? = null,
 ) {
     /** Ofox allows 9 input references; a start frame sent alongside them takes one slot. */
     val maxReferences: Int get() = if (startFrame != null) 8 else 9
@@ -80,6 +89,8 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
     private val api = ApiClient(app)
     private val library = CharacterLibrary(app)
     private val frameExtractor = FrameExtractor(app)
+    private val drafts = DraftImages(app)
+    private val draftJson = Json { ignoreUnknownKeys = true }
     private var nextId = System.currentTimeMillis()
     private var pollJob: CoroutineJob? = null
 
@@ -139,6 +150,46 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             if (repo.jobs.first().any { !it.isTerminal }) startPolling()
         }
+        restoreAndAutosaveDrafts()
+    }
+
+    /**
+     * Restores both create screens from storage, then saves them shortly after
+     * every change, so input survives leaving the app or Android closing it.
+     */
+    @OptIn(FlowPreview::class)
+    private fun restoreAndAutosaveDrafts() = viewModelScope.launch {
+        Workspace.entries.forEach { ws ->
+            repo.loadDraft(ws.name)
+                ?.let { runCatching { draftJson.decodeFromString(CreateState.serializer(), it) }.getOrNull() }
+                ?.let { saved -> flow(ws).value = saved.withMissingImagesRemoved() }
+        }
+        // Keeps the in-use copies; removes photos nothing points at any more.
+        drafts.prune(Workspace.entries.flatMap { flow(it).value.imageUris() }.toSet())
+        nextId = maxOf(nextId, Workspace.entries.maxOf { flow(it).value.maxId() } + 1)
+        Workspace.entries.forEach { ws ->
+            launch {
+                flow(ws).drop(1).debounce(DRAFT_SAVE_DELAY_MS).collect { s ->
+                    repo.saveDraft(ws.name, draftJson.encodeToString(CreateState.serializer(), s))
+                }
+            }
+        }
+    }
+
+    private fun CreateState.imageUris() = listOfNotNull(startFrame) + references.map { it.uri }
+
+    private fun CreateState.maxId() =
+        (references.map { it.id } + characters.map { it.id } + shots.map { it.id }).maxOrNull() ?: 0L
+
+    /** A restored draft may point at photos that were deleted; drop them rather than fail later. */
+    private fun CreateState.withMissingImagesRemoved(): CreateState {
+        val missing = references.filterNot { drafts.exists(it.uri) }.map { it.id }.toSet()
+        var s = copy(references = references.filterNot { it.id in missing })
+        missing.forEach { s = s.withoutCharacterImage(it) }
+        if (s.startFrame != null && !drafts.exists(s.startFrame!!)) {
+            s = s.copy(startFrame = null).withoutCharacterImage(Character.START_FRAME_IMAGE_ID)
+        }
+        return s
     }
 
     fun edit(ws: Workspace = Workspace.VIDEO, transform: (CreateState) -> CreateState) =
@@ -148,7 +199,17 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
 
     // --- Images ---------------------------------------------------------------
 
-    fun addReferences(uris: List<Uri>, ws: Workspace = Workspace.VIDEO) = edit(ws) { s ->
+    /** Photo-picker access ends with the app process, so picked photos are copied in first. */
+    fun addReferences(uris: List<Uri>, ws: Workspace = Workspace.VIDEO) = viewModelScope.launch {
+        val free = flow(ws).value.let { it.maxReferences - it.references.size }
+        val copies = runCatching { drafts.keep(uris.take(free)) }.getOrElse { e ->
+            flow(ws).update { it.copy(message = "Couldn't add those photos: ${e.message}") }
+            return@launch
+        }
+        addCopiedReferences(copies, uris.size, ws)
+    }
+
+    private fun addCopiedReferences(uris: List<Uri>, requested: Int, ws: Workspace) = edit(ws) { s ->
         val free = s.maxReferences - s.references.size
         val used = s.references.map { it.tag.lowercase() }.toMutableSet()
         val added = uris.take(free).map { uri ->
@@ -158,7 +219,7 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
             ReferenceImage(id = nextId++, uri = uri.toString(), tag = "ref$n")
         }
         val next = s.copy(references = s.references + added).offerCharacterIfNew()
-        if (uris.size > free) next.copy(message = "Only ${s.maxReferences} reference images are allowed.") else next
+        if (requested > free) next.copy(message = "Only ${s.maxReferences} reference images are allowed.") else next
     }
 
     fun updateReference(id: Long, ws: Workspace = Workspace.VIDEO, transform: (ReferenceImage) -> ReferenceImage) = edit(ws) { s ->
@@ -169,7 +230,17 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
         s.copy(references = s.references.filterNot { it.id == id }).withoutCharacterImage(id)
     }
 
-    fun setStartFrame(uri: Uri?) = edit { s ->
+    fun setStartFrame(uri: Uri?) = viewModelScope.launch {
+        val copy = uri?.let {
+            runCatching { drafts.keep(listOf(it)).single() }.getOrElse { e ->
+                _state.update { s -> s.copy(message = "Couldn't use that photo: ${e.message}") }
+                return@launch
+            }
+        }
+        applyStartFrame(copy)
+    }
+
+    private fun applyStartFrame(uri: Uri?) = edit { s ->
         val next = s.copy(startFrame = uri?.toString()).let {
             if (uri == null) it.withoutCharacterImage(Character.START_FRAME_IMAGE_ID) else it.offerCharacterIfNew()
         }
@@ -619,7 +690,7 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
                 val name = job.id.takeLast(12).replace(Regex("[^A-Za-z0-9_-]"), "_")
                 // Images are used as-is; videos contribute their final frame.
                 val frame = if (job.isImage) frameExtractor.saveImage(url, name) else frameExtractor.lastFrame(url, name)
-                setStartFrame(Uri.fromFile(frame))
+                applyStartFrame(Uri.fromFile(frame))
                 _state.update {
                     it.copy(
                         message = if (job.isImage) "Start frame set from that image. Describe what happens next."
@@ -754,6 +825,7 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
 
     private companion object {
         const val POLL_INTERVAL_MS = 5_000L
+        const val DRAFT_SAVE_DELAY_MS = 400L
         const val RECENT_LIMIT = 5
 
         fun emptyInput() = PromptInput("", emptyList(), emptyList(), false, 10, emptyList(), false, com.example.videogenerator.model.TagStyle.WAN)

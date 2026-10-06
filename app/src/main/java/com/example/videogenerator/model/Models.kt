@@ -40,6 +40,7 @@ enum class TagStyle(val label: String) {
     AT("@Image1"),
 }
 
+@Serializable
 data class Shot(
     val id: Long,
     val type: ShotType = ShotType.NONE,
@@ -48,6 +49,7 @@ data class Shot(
     val seconds: Int? = null,
 )
 
+@Serializable
 data class ReferenceImage(
     val id: Long,
     val uri: String,
@@ -61,6 +63,7 @@ data class ReferenceImage(
  * A named person built from one or more of the uploaded images, with a wardrobe
  * that must stay identical across every shot.
  */
+@Serializable
 data class Character(
     val id: Long,
     val name: String = "",

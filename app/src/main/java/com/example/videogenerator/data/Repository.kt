@@ -11,6 +11,7 @@ import com.example.videogenerator.model.Job
 import com.example.videogenerator.model.SavedCharacter
 import com.example.videogenerator.model.TagStyle
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
@@ -28,6 +29,7 @@ class Repository(private val context: Context) {
         val INSTRUCTIONS = stringPreferencesKey("instructions")
         val JOBS = stringPreferencesKey("jobs")
         val SAVED_CHARACTERS = stringPreferencesKey("saved_characters")
+        fun draft(name: String) = stringPreferencesKey("draft_$name")
     }
 
     val settings: Flow<AppSettings> = context.dataStore.data.map { p ->
@@ -65,6 +67,13 @@ class Repository(private val context: Context) {
             val current = decodeList(it, Keys.INSTRUCTIONS, Instruction.serializer())
             it[Keys.INSTRUCTIONS] = json.encodeToString(ListSerializer(Instruction.serializer()), transform(current))
         }
+    }
+
+    /** The Create Video / Create Image inputs, as JSON, so they survive the app being closed. */
+    suspend fun loadDraft(name: String): String? = context.dataStore.data.first()[Keys.draft(name)]
+
+    suspend fun saveDraft(name: String, json: String) {
+        context.dataStore.edit { it[Keys.draft(name)] = json }
     }
 
     suspend fun updateJobs(transform: (List<Job>) -> List<Job>) {
