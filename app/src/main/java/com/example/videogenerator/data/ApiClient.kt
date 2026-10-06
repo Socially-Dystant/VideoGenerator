@@ -142,7 +142,7 @@ class ApiClient(private val context: Context) {
             val text = res.body?.string().orEmpty()
             if (!res.isSuccessful) {
                 val msg = runCatching { json.decodeFromString(ErrorResponse.serializer(), text).error }.getOrNull()
-                throw ApiException(msg ?: "Server returned HTTP ${res.code}")
+                throw ApiException(msg ?: httpError(res.code, text))
             }
             json.decodeFromString(RecentResponse.serializer(), text)
         }
@@ -171,7 +171,7 @@ class ApiClient(private val context: Context) {
             val text = res.body?.string().orEmpty()
             if (!res.isSuccessful) {
                 val msg = runCatching { json.decodeFromString(ErrorResponse.serializer(), text).error }.getOrNull()
-                throw ApiException(msg ?: "Server returned HTTP ${res.code}")
+                throw ApiException(msg ?: httpError(res.code, text))
             }
             return json.decodeFromString(serializer, text)
         }
@@ -187,7 +187,7 @@ class ApiClient(private val context: Context) {
             val text = res.body?.string().orEmpty()
             if (!res.isSuccessful) {
                 val msg = runCatching { json.decodeFromString(ErrorResponse.serializer(), text).error }.getOrNull()
-                throw ApiException(msg ?: "Server returned HTTP ${res.code}")
+                throw ApiException(msg ?: httpError(res.code, text))
             }
             return runCatching { json.decodeFromString(TaskResponse.serializer(), text) }.getOrElse { TaskResponse() }
         }
@@ -210,6 +210,14 @@ class ApiClient(private val context: Context) {
             it.toByteArray()
         }
     }
+
+    /** Express answers unknown routes with "Cannot GET …": the server predates this app version. */
+    private fun httpError(code: Int, body: String): String =
+        if (code == 404 && body.contains("Cannot ")) {
+            "The server is out of date. Push the latest code to GitHub so Render redeploys it."
+        } else {
+            "Server returned HTTP $code"
+        }
 
     private companion object {
         const val MAX_SIDE = 2048
