@@ -34,10 +34,10 @@ function findMinorReference(text) {
 }
 
 const SFW_DIRECTIVE =
-  'Content rules: keep the video safe for work. No nudity, no sexual content, no graphic gore.';
+  'Keep it safe for work: no nudity, sexual content or gore.';
 
 const NSFW_DIRECTIVE =
-  'Content rules: every person depicted is a consenting adult aged 18 or older with a clearly adult appearance.';
+  'Everyone shown is a consenting adult (18+) with a clearly adult appearance.';
 
 // Asks a vision model whether any image shows someone who may be under 18.
 // Fails closed: errors, unparseable answers or uncertainty all block the request.

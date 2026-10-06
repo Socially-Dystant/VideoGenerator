@@ -86,6 +86,22 @@ data class EraseAllSpicyResponse(
 @Serializable
 private data class EraseRequest(val ids: List<String>)
 
+/** One provider's balance in USD, or why it couldn't be read. */
+@Serializable
+data class ProviderBalance(
+    val available: Double? = null,
+    /** SpicyAPI only: reserved by jobs still running. */
+    val held: Double? = null,
+    /** Ofox only: lifetime spend. */
+    val used: Double? = null,
+    val total: Double? = null,
+    val currency: String = "USD",
+    val error: String? = null,
+)
+
+@Serializable
+data class Balances(val ofox: ProviderBalance = ProviderBalance(), val spicy: ProviderBalance = ProviderBalance())
+
 class ApiException(message: String) : IOException(message)
 
 /** Talks to our Render server, which holds the Ofox key. */
@@ -143,6 +159,10 @@ class ApiClient(private val context: Context) {
             token,
             EraseAllSpicyResponse.serializer(),
         )
+    }
+
+    suspend fun balances(baseUrl: String, token: String): Balances = withContext(Dispatchers.IO) {
+        decode(Request.Builder().url("$baseUrl/api/balance").get(), token, Balances.serializer())
     }
 
     private fun <T> decode(builder: Request.Builder, token: String, serializer: kotlinx.serialization.KSerializer<T>): T {

@@ -255,6 +255,30 @@ app.post('/api/videos/erase-all-spicy', requireAppToken, async (_req, res) => {
   res.json({ purged, skipped, failed });
 });
 
+// Remaining credit on both accounts, in USD. Each side reports its own error so
+// one failing provider doesn't hide the other's balance.
+app.get('/api/balance', requireAppToken, async (_req, res) => {
+  const ofoxBalance = ofox('/v1/user/balance')
+    .then(({ ok, status, body }) => {
+      if (!ok) return { error: ofoxError(body, `Ofox returned HTTP ${status}`) };
+      return { available: Number(body.balance), used: Number(body.used), total: Number(body.total), currency: body.currency || 'USD' };
+    })
+    .catch((err) => ({ error: `Ofox: ${err.message}` }));
+  const spicyBalance = spicy
+    ? spicy
+        .call('/chat/credit')
+        .then((data) => ({
+          available: Number(data.available),
+          held: Number(data.held ?? 0),
+          total: Number(data.total),
+          currency: 'USD',
+        }))
+        .catch((err) => ({ error: `SpicyAPI: ${err.message}` }))
+    : Promise.resolve({ error: 'SPICY_API_KEY missing on the server.' });
+  const [ofoxResult, spicyResult] = await Promise.all([ofoxBalance, spicyBalance]);
+  res.json({ ofox: ofoxResult, spicy: spicyResult });
+});
+
 // The latest jobs from each provider, newest first. Registered before /:id so
 // "recent" isn't treated as a job id.
 app.get('/api/videos/recent', requireAppToken, async (req, res) => {

@@ -43,8 +43,8 @@ class PromptBuilderTest {
         assertEquals("Image 1", p.tagMap["@start"])
         assertEquals("Image 2", p.tagMap["@anna"])
         assertEquals("Image 3", p.tagMap["@car"])
+        assertTrue(p.text.contains("References:\nImage 1 = start frame.\nImage 2 = a woman in a red coat.\nImage 3 = car."))
         assertTrue(p.text.contains("Scene: Night street. Image 2 walks to Image 3."))
-        assertTrue(p.text.contains("Image 2: a woman in a red coat."))
     }
 
     @Test
@@ -55,11 +55,23 @@ class PromptBuilderTest {
     }
 
     @Test
-    fun shotsGetTimings() {
+    fun everyShotOpensWithContinuityAndShot1UsesTheStartFrame() {
         val p = PromptBuilder.build(input())
-        assertTrue(p.text.contains("Shot 1 (0s–4s, wide shot): Image 2 crosses the road"))
-        assertTrue(p.text.contains("Shot 2 (4s–7s, close-up)"))
-        assertTrue(p.text.contains("Shot 3 (7s–10s): Image 3 drives away"))
+        assertTrue(p.text.contains(
+            "1 (0–4s, wide shot): Starts exactly on Image 1; every character keeps the face, hair, body and clothes " +
+                "shown in Image 1. Image 2 crosses the road",
+        ))
+        assertTrue(p.text.contains(
+            "2 (4–7s, close-up): Every character keeps the face, hair, body and clothes from the end of shot 1. " +
+                "Image 2 opens the door of Image 3",
+        ))
+        assertTrue(p.text.contains("3 (7–10s): Every character keeps the face, hair, body and clothes from the end of shot 2."))
+    }
+
+    @Test
+    fun noStartFrameMeansNoOpeningLine() {
+        val p = PromptBuilder.build(input(start = false))
+        assertTrue(p.text.contains("1 (0–4s, wide shot): Image1 crosses the road".replace("Image1", "Image 1")))
     }
 
     @Test
@@ -93,24 +105,31 @@ class PromptBuilderTest {
     )
 
     @Test
-    fun characterTagResolvesToItsImages() {
+    fun characterTagBecomesItsNameAndIsDefinedOnce() {
         val p = PromptBuilder.build(input().copy(characters = listOf(mara), scene = "@Mara walks to @car."))
-        assertEquals("Mara (Image 1, Image 2)", p.tagMap["@mara"])
-        assertTrue(p.text.contains("Scene: Mara (Image 1, Image 2) walks to Image 3."))
+        assertEquals("Mara", p.tagMap["@mara"])
+        assertEquals(listOf("Image 1", "Image 2"), p.characterImages["mara"])
+        assertTrue(p.text.contains("Scene: Mara walks to Image 3."))
         assertTrue(p.unknownTags.isEmpty())
     }
 
     @Test
-    fun characterBlockLocksIdentityAndWardrobe() {
+    fun characterLineIsCompact() {
         val p = PromptBuilder.build(input().copy(characters = listOf(mara), scene = "@Mara walks."))
         println(p.text)
-        assertTrue(p.text.contains("Character Mara (Image 1, Image 2):"))
-        assertTrue(p.text.contains("Mara is the exact person shown in Image 1 and Image 2; all of these images show the same person."))
-        assertTrue(p.text.contains("- Top / outerwear: cropped black leather biker jacket over a white ribbed tank top."))
-        assertTrue(p.text.contains("- Footwear: white canvas sneakers."))
-        assertTrue(p.text.contains("Distinguishing features that must always be visible and unchanged: rose tattoo on left wrist."))
-        assertTrue(p.text.contains("Do not add, remove, swap, recolour or restyle any item"))
-        // Character section comes before the scene so the model knows who @Mara is first.
-        assertTrue(p.text.indexOf("Character Mara") < p.text.indexOf("Scene:"))
+        assertTrue(p.text.contains(
+            "Characters:\nMara (Image 1, Image 2): identical face, hair, skin tone and body to these images. " +
+                "Always visible: rose tattoo on left wrist. Wears, unchanged throughout: cropped black leather biker jacket " +
+                "over a white ribbed tank top; light-wash straight-leg jeans; white canvas sneakers.",
+        ))
+        assertTrue(p.text.indexOf("Characters:") < p.text.indexOf("Scene:"))
+    }
+
+    @Test
+    fun multipleCharactersEachGetALine() {
+        val ben = Character(id = 11, name = "Ben", imageIds = listOf(2), top = "grey hoodie")
+        val p = PromptBuilder.build(input().copy(characters = listOf(mara, ben)))
+        assertTrue(p.text.contains("\nBen (Image 3): identical face, hair, skin tone and body to Image 3. Wears, unchanged throughout: grey hoodie."))
+        assertTrue(p.text.contains("Image 3 = Ben."))
     }
 }

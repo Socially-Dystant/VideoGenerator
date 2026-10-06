@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.videogenerator.data.ApiClient
+import com.example.videogenerator.data.Balances
 import com.example.videogenerator.data.CharacterLibrary
 import com.example.videogenerator.data.FrameExtractor
 import com.example.videogenerator.data.GenerateRequest
@@ -77,6 +78,22 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
     val jobs: StateFlow<List<Job>> = repo.jobs.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
     val savedCharacters: StateFlow<List<SavedCharacter>> =
         repo.savedCharacters.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    private val _balances = MutableStateFlow<Result<Balances>?>(null)
+    /** Null until first loaded; a failure means the server itself couldn't be reached. */
+    val balances: StateFlow<Result<Balances>?> = _balances.asStateFlow()
+    private val _loadingBalances = MutableStateFlow(false)
+    val loadingBalances: StateFlow<Boolean> = _loadingBalances.asStateFlow()
+
+    fun loadBalances() {
+        val cfg = settings.value
+        if (cfg.serverUrl.isBlank() || cfg.appToken.isBlank() || _loadingBalances.value) return
+        _loadingBalances.value = true
+        viewModelScope.launch {
+            _balances.value = runCatching { api.balances(cfg.serverUrl, cfg.appToken) }
+            _loadingBalances.value = false
+        }
+    }
 
     /** Feedback for library actions, shown in the Characters section. */
     private val _libraryMessage = MutableStateFlow<String?>(null)
@@ -258,6 +275,24 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
             )
         }
         _libraryMessage.value = "Added ${saved.name} with ${refs.size} image${if (refs.size == 1) "" else "s"}."
+        return null
+    }
+
+    /**
+     * Adds several saved characters in one go. Checks up front that they all fit,
+     * so the video isn't left with only some of them.
+     */
+    fun loadSavedCharacters(saved: List<SavedCharacter>): String? {
+        val s = _state.value
+        val needed = saved.sumOf { c -> c.imagePaths.count { File(it).exists() } }
+        val free = s.maxReferences - s.references.size
+        if (needed > free) {
+            return "These characters need $needed reference slots but only $free are free. Pick fewer or remove some reference images."
+        }
+        val names = saved.map { it.name.lowercase() }
+        if (names.size != names.toSet().size) return "Two of the selected characters have the same name."
+        saved.forEach { c -> loadSavedCharacter(c)?.let { return it } }
+        _libraryMessage.value = if (saved.size == 1) _libraryMessage.value else "Added ${saved.joinToString { it.name }}."
         return null
     }
 

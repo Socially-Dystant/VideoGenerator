@@ -25,6 +25,8 @@ data class BuiltPrompt(
     /** @tags found in the text that don't match an image. */
     val unknownTags: Set<String>,
     val warnings: List<String>,
+    /** Character tag → the image labels that show them. */
+    val characterImages: Map<String, List<String>> = emptyMap(),
 )
 
 object PromptBuilder {
@@ -65,69 +67,44 @@ object PromptBuilder {
         return labels
     }
 
-    /** "Mara (Image 2, Image 3)": what @mara becomes in the prompt. */
-    fun characterReference(name: String, labels: List<String>) =
-        if (labels.isEmpty()) name else "$name (${labels.joinToString(", ")})"
-
-    private fun joinLabels(labels: List<String>) = when (labels.size) {
-        0 -> ""
-        1 -> labels[0]
-        else -> labels.dropLast(1).joinToString(", ") + " and " + labels.last()
+    /**
+     * One compact line per character: who they are, an identity lock, and the
+     * outfit that must not change. Kept short on purpose; long, repetitive
+     * instructions dilute what the model pays attention to.
+     */
+    fun characterLine(character: Character, labels: List<String>, resolve: (String) -> String): String = buildString {
+        append(character.name)
+        if (labels.isNotEmpty()) {
+            append(" (${labels.joinToString(", ")}): identical face, hair, skin tone and body to ")
+            append(if (labels.size == 1) labels[0] else "these images")
+            append(".")
+        } else {
+            append(":")
+        }
+        resolve(character.features).trimEnd('.').takeIf { it.isNotEmpty() }?.let { append(" Always visible: $it.") }
+        val outfit = listOf(character.top, character.bottom, character.footwear, character.accessories, character.otherClothing)
+            .map { resolve(it).trimEnd('.') }
+            .filter { it.isNotEmpty() }
+        if (outfit.isNotEmpty()) append(" Wears, unchanged throughout: ${outfit.joinToString("; ")}.")
     }
 
     /**
-     * Identity lock plus wardrobe continuity. The wording is deliberately
-     * exhaustive: Wan follows explicit, enumerated constraints far better than
-     * a general "keep them consistent".
+     * Continuity line that opens every shot. Shot 1 is anchored to the start
+     * frame; later shots carry over from the end of the previous shot.
      */
-    fun characterBlock(character: Character, labels: List<String>, resolve: (String) -> String): String = buildString {
-        val name = character.name
-        val images = joinLabels(labels)
-        val plural = labels.size > 1
-        append("Character $name")
-        if (labels.isNotEmpty()) append(" (${labels.joinToString(", ")})")
-        append(":\n")
-        if (labels.isNotEmpty()) {
-            append("$name is the exact person shown in $images")
-            append(if (plural) "; all of these images show the same person.\n" else ".\n")
-            append(
-                "Reproduce $name's appearance exactly as in ${if (plural) "those images" else images}: identical face and " +
-                    "facial structure, eye shape and colour, eyebrows, nose, lips, jawline, skin tone and skin texture, " +
-                    "hairstyle, hair colour, hair length and hairline, body type, height and proportions. " +
-                    "Do not alter, beautify, age, de-age, slim or stylise $name, and do not blend in features from anyone else. " +
-                    "$name must be instantly recognisable as the same person in every shot, from every angle and distance, " +
-                    "and in any lighting.\n",
-            )
-        }
-        resolve(character.features).trimEnd('.').takeIf { it.isNotEmpty() }?.let {
-            append("Distinguishing features that must always be visible and unchanged: $it.\n")
-        }
-        if (character.hasClothing) {
-            append("$name's wardrobe, identical in every shot from the first frame to the last:\n")
-            listOf(
-                "Top / outerwear" to character.top,
-                "Bottoms" to character.bottom,
-                "Footwear" to character.footwear,
-                "Accessories" to character.accessories,
-                "Other clothing details" to character.otherClothing,
-            ).forEach { (label, value) ->
-                resolve(value).trimEnd('.').takeIf { it.isNotEmpty() }?.let { append("- $label: $it.\n") }
-            }
-            append(
-                "Keep every garment's colour, shade, material, texture, pattern, print, logo, fit, length, layering, " +
-                    "buttons, zips and how it is worn exactly the same throughout the video. Do not add, remove, swap, " +
-                    "recolour or restyle any item, and keep the clothing continuous between shots.",
-            )
-            if (labels.isNotEmpty()) append(" If the clothing in the reference images differs, dress $name as described here.")
-        }
-    }.trimEnd()
+    fun continuityLine(shotIndex: Int, startLabel: String?): String? = when {
+        shotIndex == 0 && startLabel != null ->
+            "Starts exactly on $startLabel; every character keeps the face, hair, body and clothes shown in $startLabel."
+        shotIndex == 0 -> null
+        else -> "Every character keeps the face, hair, body and clothes from the end of shot $shotIndex."
+    }
 
     fun build(input: PromptInput): BuiltPrompt {
         val imageTags = tagMap(input.references, input.hasStartFrame, input.tagStyle)
-        val characterLabels = input.characters.associateWith { characterImageLabels(it, input.references, imageTags) }
-        val tags = LinkedHashMap(imageTags).apply {
-            characterLabels.forEach { (c, labels) -> if (c.tag.isNotEmpty()) put(c.tag, characterReference(c.name, labels)) }
-        }
+        val characters = input.characters.filter { it.name.isNotBlank() }
+        val characterImages = characters.associate { it.tag to characterImageLabels(it, input.references, imageTags) }
+        // @Name becomes just the name; the Characters section already ties it to its images.
+        val tags = LinkedHashMap(imageTags).apply { characters.forEach { put(it.tag, it.name) } }
         val unknown = mutableSetOf<String>()
         val warnings = mutableListOf<String>()
 
@@ -144,60 +121,69 @@ object PromptBuilder {
             sections += it.joinToString("\n")
         }
 
-        val imageLines = mutableListOf<String>()
-        if (input.hasStartFrame) {
-            imageLines += if (input.references.isEmpty()) {
-                "Animate from the provided first frame, keeping its composition, characters and lighting."
-            } else {
-                val label = imageTags.getValue(START_FRAME_TAG)
-                "$label is the opening frame: the video must start exactly on $label as shown, then continue from it."
-            }
-        }
+        val startLabel = if (input.hasStartFrame) imageTags[START_FRAME_TAG] else null
+
+        // References: one "Image N = …" line each.
+        val referenceLines = mutableListOf<String>()
+        if (startLabel != null && input.references.isNotEmpty()) referenceLines += "$startLabel = start frame."
         input.references.forEach { ref ->
             val label = imageTags.getValue(ref.tag.lowercase())
             val note = resolve(ref.note).trimEnd('.')
-            val owners = input.characters.filter { ref.id in it.imageIds && it.name.isNotBlank() }.map { it.name }
-            imageLines += when {
-                note.isNotEmpty() -> "$label: $note."
-                owners.isNotEmpty() -> "$label: ${owners.joinToString(" and ")}."
-                else -> "$label: reference image; keep its subject's identity and appearance consistent."
+            val owners = characters.filter { ref.id in it.imageIds }.map { it.name }
+            referenceLines += "$label = " + when {
+                note.isNotEmpty() -> note
+                owners.isNotEmpty() -> owners.joinToString(" and ")
+                DEFAULT_TAG.matches(ref.tag) -> "reference image"
+                else -> ref.tag
+            } + "."
+        }
+        if (referenceLines.isNotEmpty()) sections += "References:\n" + referenceLines.joinToString("\n")
+
+        if (characters.isNotEmpty()) {
+            sections += "Characters:\n" + characters.joinToString("\n") {
+                characterLine(it, characterImages.getValue(it.tag), ::resolve)
             }
         }
-        if (imageLines.isNotEmpty()) sections += imageLines.joinToString("\n")
-
-        characterLabels.forEach { (character, labels) ->
-            if (character.name.isNotBlank()) sections += characterBlock(character, labels, ::resolve)
-        }
-
-        resolve(input.scene).takeIf { it.isNotEmpty() }?.let { sections += "Scene: $it" }
 
         val shots = input.shots.filter { it.description.isNotBlank() || it.type != ShotType.NONE }
+        val scene = resolve(input.scene)
+        when {
+            scene.isNotEmpty() && shots.isEmpty() ->
+                sections += "Scene: " + listOfNotNull(continuityLine(0, startLabel), scene).joinToString(" ")
+            scene.isNotEmpty() -> sections += "Scene: $scene"
+            shots.isEmpty() && startLabel != null -> sections += "Scene: ${continuityLine(0, startLabel)}"
+        }
+
         if (shots.isNotEmpty()) {
             val timings = shotTimings(shots.map { it.seconds }, input.durationSeconds)
             if (shots.sumOf { it.seconds ?: 0 } > input.durationSeconds) {
                 warnings += "Shot lengths add up to more than ${input.durationSeconds}s."
             }
-            sections += buildString {
-                append("Shots:")
-                shots.forEachIndexed { i, shot ->
-                    val (start, end) = timings[i]
-                    append("\nShot ${i + 1} (${start}s–${end}s")
-                    if (shot.type != ShotType.NONE) append(", ${shot.type.label.lowercase()}")
-                    append("): ")
-                    append(resolve(shot.description).ifEmpty { "continue the action." })
-                }
-            }
+            sections += "Shots:\n" + shots.mapIndexed { i, shot ->
+                val (start, end) = timings[i]
+                val framing = if (shot.type != ShotType.NONE) ", ${shot.type.label.lowercase()}" else ""
+                val body = listOfNotNull(continuityLine(i, startLabel), resolve(shot.description).ifEmpty { "Continue the action." })
+                "${i + 1} (${start}–${end}s$framing): ${body.joinToString(" ")}"
+            }.joinToString("\n")
         }
 
         sections += if (input.nsfw) Safety.NSFW_DIRECTIVE else Safety.SFW_DIRECTIVE
 
         if (input.scene.isBlank() && shots.isEmpty()) warnings += "Add a scene description or at least one shot."
-        val text = sections.joinToString("\n\n")
         if (unknown.isNotEmpty()) {
             warnings += "Unknown tag(s): " + unknown.joinToString { "@$it" } + ". They are sent as plain text."
         }
-        return BuiltPrompt(text, tags.mapKeys { "@${it.key}" }, unknown, warnings)
+        return BuiltPrompt(
+            text = sections.joinToString("\n\n"),
+            tagMap = tags.mapKeys { "@${it.key}" },
+            unknownTags = unknown,
+            warnings = warnings,
+            characterImages = characterImages,
+        )
     }
+
+    /** Tags the app gives new uploads ("ref1"…); they say nothing about the image. */
+    private val DEFAULT_TAG = Regex("ref\\d+", RegexOption.IGNORE_CASE)
 
     /**
      * Assigns start/end seconds to each shot. Fixed lengths are honoured; the

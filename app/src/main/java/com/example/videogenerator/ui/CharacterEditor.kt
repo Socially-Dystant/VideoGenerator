@@ -56,10 +56,13 @@ fun CharacterEditorDialog(
     images: List<CharacterImageOption>,
     /** Second argument: also save to the character library. */
     onSave: (Character, Boolean) -> String?,
+    /** When set, a "Save & add another" button saves and starts a fresh character. */
+    onCreateAnother: (() -> Character)? = null,
     onDismiss: () -> Unit,
 ) {
     var c by remember(initial.id) { mutableStateOf(initial) }
     var error by remember { mutableStateOf<String?>(null) }
+    var savedCount by remember { mutableStateOf(0) }
     // Characters that came from the library stay in sync with it by default.
     var saveToLibrary by remember(initial.id) { mutableStateOf(initial.savedId != null) }
 
@@ -168,6 +171,14 @@ fun CharacterEditorDialog(
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 }
+                if (savedCount > 0 && error == null) {
+                    Text(
+                        "$savedCount character${if (savedCount == 1) "" else "s"} added. Fill in the next one, or Cancel when done.",
+                        color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(horizontal = 20.dp),
+                    )
+                }
                 error?.let {
                     Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 20.dp))
                 }
@@ -177,6 +188,15 @@ fun CharacterEditorDialog(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     TextButton(onClick = onDismiss) { Text("Cancel") }
+                    if (isNew && onCreateAnother != null) {
+                        TextButton(onClick = {
+                            error = onSave(c, saveToLibrary)
+                            if (error == null) {
+                                savedCount++
+                                c = onCreateAnother()
+                            }
+                        }) { Text("Save & add another") }
+                    }
                     Spacer(Modifier.width(8.dp))
                     Button(onClick = {
                         error = onSave(c, saveToLibrary)

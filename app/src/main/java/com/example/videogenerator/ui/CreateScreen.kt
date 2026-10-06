@@ -138,6 +138,7 @@ fun CreateScreen(vm: GeneratorViewModel, modifier: Modifier = Modifier) {
             isNew = state.characters.none { it.id == character.id },
             images = characterImages,
             onSave = vm::saveCharacter,
+            onCreateAnother = vm::newCharacter,
             onDismiss = { editingCharacter = null },
         )
     }
@@ -145,7 +146,8 @@ fun CreateScreen(vm: GeneratorViewModel, modifier: Modifier = Modifier) {
     if (showLibrary) {
         SavedCharactersDialog(
             saved = savedCharacters,
-            onLoad = vm::loadSavedCharacter,
+            alreadyAdded = state.characters.mapNotNull { it.savedId }.toSet(),
+            onAdd = vm::loadSavedCharacters,
             onDelete = { vm.deleteSavedCharacter(it) },
             onDismiss = { showLibrary = false },
         )
@@ -230,7 +232,7 @@ fun CreateScreen(vm: GeneratorViewModel, modifier: Modifier = Modifier) {
                         Column(Modifier.weight(1f)) {
                             Text("@${character.name}", style = MaterialTheme.typography.titleSmall)
                             Text(
-                                prompt.tagMap["@${character.tag}"].orEmpty(),
+                                prompt.characterImages[character.tag].orEmpty().joinToString(", "),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.secondary,
                             )

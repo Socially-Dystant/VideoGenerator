@@ -15,7 +15,13 @@ import androidx.compose.material3.Text
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.Alignment
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
+import com.example.videogenerator.data.ProviderBalance
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -34,6 +40,9 @@ fun SettingsScreen(vm: GeneratorViewModel, modifier: Modifier = Modifier) {
     var token by remember(saved) { mutableStateOf(saved.appToken) }
     var tagStyle by remember(saved) { mutableStateOf(saved.tagStyle) }
     var message by remember { mutableStateOf<String?>(null) }
+    val balances by vm.balances.collectAsState()
+    val loadingBalances by vm.loadingBalances.collectAsState()
+    LaunchedEffect(saved.serverUrl, saved.appToken) { vm.loadBalances() }
 
     Column(
         modifier.verticalScroll(rememberScrollState()).padding(16.dp),
@@ -56,6 +65,29 @@ fun SettingsScreen(vm: GeneratorViewModel, modifier: Modifier = Modifier) {
                 modifier = Modifier.fillMaxWidth(),
             )
         }
+        Section("Balances", "Remaining credit on each account, in US dollars.") {
+            when {
+                saved.serverUrl.isBlank() || saved.appToken.isBlank() ->
+                    Text("Save the server URL and app token to see balances.", style = MaterialTheme.typography.bodySmall)
+                balances == null && loadingBalances -> CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                else -> balances?.fold(
+                    onSuccess = {
+                        BalanceRow("Ofox (NSFW off)", it.ofox)
+                        BalanceRow("SpicyAPI (NSFW on)", it.spicy)
+                    },
+                    onFailure = {
+                        Text("Couldn't reach the server: ${it.message}", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    },
+                )
+            }
+            OutlinedButton(onClick = vm::loadBalances, enabled = !loadingBalances) {
+                if (loadingBalances) {
+                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                }
+                Text("Refresh balances")
+            }
+        }
         Section("Tag format", "How @tags are written in the prompt sent to Ofox. Wan 3.0 documents \"Image 1\".") {
             Row {
                 TagStyle.entries.forEach { style ->
@@ -74,5 +106,27 @@ fun SettingsScreen(vm: GeneratorViewModel, modifier: Modifier = Modifier) {
             }
         }) { Text("Save") }
         message?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
+    }
+}
+
+@Composable
+private fun BalanceRow(label: String, balance: ProviderBalance) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+        Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+        Column(horizontalAlignment = Alignment.End) {
+            if (balance.error != null) {
+                Text(balance.error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            } else {
+                Text(
+                    balance.available?.let { formatUsd(it) } ?: "—",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = if ((balance.available ?: 0.0) < 1.0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                )
+                listOfNotNull(
+                    balance.held?.takeIf { it > 0 }?.let { "${formatUsd(it)} held by running jobs" },
+                    balance.used?.let { "${formatUsd(it)} spent in total" },
+                ).forEach { Text(it, style = MaterialTheme.typography.labelSmall) }
+            }
+        }
     }
 }

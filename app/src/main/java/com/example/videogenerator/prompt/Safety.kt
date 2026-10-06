@@ -6,9 +6,9 @@ package com.example.videogenerator.prompt
  */
 object Safety {
     const val SFW_DIRECTIVE =
-        "Content rules: keep the video safe for work. No nudity, no sexual content, no graphic gore."
+        "Keep it safe for work: no nudity, sexual content or gore."
     const val NSFW_DIRECTIVE =
-        "Content rules: every person depicted is a consenting adult aged 18 or older with a clearly adult appearance."
+        "Everyone shown is a consenting adult (18+) with a clearly adult appearance."
 
     private val MINOR_TERMS = listOf(
         "child", "children", "childlike", "kid", "kids", "kiddie", "minor", "minors",
