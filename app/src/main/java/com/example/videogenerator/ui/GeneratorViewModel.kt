@@ -77,6 +77,10 @@ data class CreateState(
 ) {
     /** Ofox allows 9 input references; a start frame sent alongside them takes one slot. */
     val maxReferences: Int get() = if (startFrame != null) 8 else 9
+    /** Anything typed or added, so Clear can be disabled on an empty form. */
+    val hasInput: Boolean get() =
+        scene.isNotBlank() || startFrame != null || references.isNotEmpty() || characters.isNotEmpty() ||
+            shots.any { it.description.isNotBlank() || it.seconds != null }
     val estimatedCostUsd: Double get() = (if (nsfw) resolution.nsfwUsdPerSecond else resolution.usdPerSecond) * duration
 }
 
@@ -201,6 +205,11 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
 
     fun edit(ws: Workspace = Workspace.VIDEO, transform: (CreateState) -> CreateState) =
         flow(ws).update { transform(it).copy(message = null) }
+
+    /** Resets a create screen to a blank form (the autosaved draft is cleared too). */
+    fun clearWorkspace(ws: Workspace) {
+        flow(ws).value = if (ws == Workspace.IMAGE) CreateState(shots = emptyList()) else CreateState(shots = listOf(Shot(id = nextId++)))
+    }
 
     fun dismissMessage(ws: Workspace = Workspace.VIDEO) = flow(ws).update { it.copy(message = null) }
 

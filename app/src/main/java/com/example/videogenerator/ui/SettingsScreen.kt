@@ -21,6 +21,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Alignment
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.platform.LocalUriHandler
 import com.example.videogenerator.data.ProviderBalance
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -72,8 +75,8 @@ fun SettingsScreen(vm: GeneratorViewModel, modifier: Modifier = Modifier) {
                 balances == null && loadingBalances -> CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                 else -> balances?.fold(
                     onSuccess = {
-                        BalanceRow("Ofox (NSFW off)", it.ofox)
-                        BalanceRow("SpicyAPI (NSFW on)", it.spicy)
+                        BalanceRow("Ofox (NSFW off)", it.ofox, OFOX_TOP_UP_URL, "Opens the Ofox console; choose Billing to add funds.")
+                        BalanceRow("SpicyAPI (NSFW on, images)", it.spicy, SPICY_TOP_UP_URL, null)
                     },
                     onFailure = {
                         Text("Couldn't reach the server: ${it.message}", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
@@ -110,9 +113,14 @@ fun SettingsScreen(vm: GeneratorViewModel, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun BalanceRow(label: String, balance: ProviderBalance) {
+private fun BalanceRow(label: String, balance: ProviderBalance, topUpUrl: String, topUpHint: String?) {
+    val uriHandler = LocalUriHandler.current
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-        Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+        Column(Modifier.weight(1f)) {
+            Text(label, style = MaterialTheme.typography.bodyMedium)
+            TextButton(onClick = { uriHandler.openUri(topUpUrl) }, contentPadding = PaddingValues(0.dp)) { Text("Top up ↗") }
+            topUpHint?.let { Text(it, style = MaterialTheme.typography.labelSmall) }
+        }
         Column(horizontalAlignment = Alignment.End) {
             if (balance.error != null) {
                 Text(balance.error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
@@ -130,3 +138,7 @@ private fun BalanceRow(label: String, balance: ProviderBalance) {
         }
     }
 }
+
+/** Ofox doesn't publish a direct billing link; Billing is a page inside its console. */
+private const val OFOX_TOP_UP_URL = "https://app.ofox.ai"
+private const val SPICY_TOP_UP_URL = "https://spicyapi.ai/console/billing"

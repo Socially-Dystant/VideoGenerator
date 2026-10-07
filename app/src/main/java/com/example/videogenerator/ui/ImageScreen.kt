@@ -49,6 +49,8 @@ fun ImageScreen(vm: GeneratorViewModel, modifier: Modifier = Modifier) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
+        ClearBar("image", enabled = state.hasInput) { vm.clearWorkspace(ws) }
+
         ReferenceAndCharacterSections(vm, ws, state, prompt, noun = "image")
 
         Section("Prompt", "Describe the image: subject, setting, composition, style and lighting.") {

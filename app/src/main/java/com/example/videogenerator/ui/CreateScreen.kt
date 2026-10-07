@@ -104,6 +104,8 @@ fun CreateScreen(vm: GeneratorViewModel, modifier: Modifier = Modifier) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
+        ClearBar("video", enabled = state.hasInput) { vm.clearWorkspace(Workspace.VIDEO) }
+
         // --- Start frame -------------------------------------------------------------
         Section("Start frame", "Optional. The video opens on this image. Tag: @${PromptBuilder.START_FRAME_TAG}") {
             if (state.startFrame == null) {
