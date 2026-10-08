@@ -40,6 +40,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.videogenerator.model.Character
 import com.example.videogenerator.prompt.BuiltPrompt
+import com.example.videogenerator.prompt.PromptBuilder
 
 /**
  * Reference images and Characters sections, shared by Create Video and Create
@@ -206,6 +207,46 @@ fun ReferenceAndCharacterSections(
                 "Add reference images to create a character, or add one from Saved.",
                 style = MaterialTheme.typography.bodySmall,
             )
+        }
+    }
+}
+
+/** Optional photo of the place everything happens in, shared by Create Video and Create Image. */
+@Composable
+fun LocationSection(vm: GeneratorViewModel, ws: Workspace, state: CreateState, prompt: BuiltPrompt) {
+    val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) vm.setLocation(uri, ws)
+    }
+    val imagesOnly = PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+    Section(
+        "Location",
+        "Optional. A photo of the place where it all happens; its layout and look are kept. " +
+            "Uses one reference slot. Tag: @${PromptBuilder.LOCATION_TAG}",
+    ) {
+        val location = state.location
+        if (location == null) {
+            OutlinedButton(onClick = { pick.launch(imagesOnly) }) {
+                Icon(Icons.Default.Add, null); Spacer(Modifier.width(8.dp)); Text("Choose location image")
+            }
+        } else {
+            Row(verticalAlignment = Alignment.Top) {
+                Thumbnail(location, Modifier.size(96.dp))
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("@${PromptBuilder.LOCATION_TAG} → ${prompt.tagMap["@${PromptBuilder.LOCATION_TAG}"]}", style = MaterialTheme.typography.bodyMedium)
+                    OutlinedTextField(
+                        value = state.locationNote,
+                        onValueChange = { v -> vm.edit(ws) { it.copy(locationNote = v) } },
+                        label = { Text("Details (optional)") },
+                        placeholder = { Text("e.g. rainy evening, neon signs") },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Row {
+                        TextButton(onClick = { pick.launch(imagesOnly) }) { Text("Replace") }
+                        TextButton(onClick = { vm.setLocation(null, ws) }) { Text("Remove") }
+                    }
+                }
+            }
         }
     }
 }

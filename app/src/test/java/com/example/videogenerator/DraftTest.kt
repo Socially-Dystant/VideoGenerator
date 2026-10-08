@@ -23,6 +23,8 @@ class DraftTest {
             shots = listOf(Shot(1, ShotType.WIDE, "@mara walks", seconds = 4), Shot(2, description = "close on her face")),
             references = listOf(ReferenceImage(10, "file:///data/drafts/a.img", "mara1", "front view")),
             startFrame = "file:///data/frames/f.jpg",
+            location = "file:///data/drafts/place.img",
+            locationNote = "rainy evening",
             characters = listOf(Character(20, "Mara", listOf(10, Character.START_FRAME_IMAGE_ID), top = "red coat", savedId = 5)),
             resolution = Resolution.P1080,
             duration = 25,

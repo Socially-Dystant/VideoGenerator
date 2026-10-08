@@ -94,6 +94,24 @@ class PromptBuilderTest {
         assertNull(Safety.findMinorReference("a 30 year old man, personal season"))
     }
 
+    @Test
+    fun locationComesAfterTheReferencesAndIsDescribed() {
+        val p = PromptBuilder.build(input().copy(hasLocation = true, locationNote = "rainy evening", scene = "@anna waits at @location."))
+        assertEquals("Image 4", p.tagMap["@location"])
+        assertTrue(p.text.contains("Image 3 = car.\nImage 4 = location."))
+        assertTrue(p.text.contains("Location: everything happens in the place shown in Image 4;"))
+        assertTrue(p.text.contains("throughout. rainy evening."))
+        assertTrue(p.text.contains("Scene: Image 2 waits at Image 4."))
+    }
+
+    @Test
+    fun startFrameAndLocationWithoutReferencesAreBothImages() {
+        val p = PromptBuilder.build(input(refs = emptyList()).copy(hasLocation = true))
+        assertEquals("Image 1", p.tagMap["@start"])
+        assertEquals("Image 2", p.tagMap["@location"])
+        assertTrue(p.text.contains("References:\nImage 1 = start frame.\nImage 2 = location."))
+    }
+
     private val mara = Character(
         id = 10,
         name = "Mara",

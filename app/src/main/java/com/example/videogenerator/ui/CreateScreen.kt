@@ -127,6 +127,8 @@ fun CreateScreen(vm: GeneratorViewModel, modifier: Modifier = Modifier) {
             }
         }
 
+        LocationSection(vm, Workspace.VIDEO, state, prompt)
+
         ReferenceAndCharacterSections(vm, Workspace.VIDEO, state, prompt, noun = "shot")
 
         // --- Scene ---------------------------------------------------------------------------

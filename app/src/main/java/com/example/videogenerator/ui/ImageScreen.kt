@@ -41,7 +41,7 @@ fun ImageScreen(vm: GeneratorViewModel, modifier: Modifier = Modifier) {
     val prompt by vm.imagePrompt.collectAsState()
     val context = LocalContext.current
     val ws = Workspace.IMAGE
-    val hasReferences = state.references.isNotEmpty()
+    val hasReferences = state.references.isNotEmpty() || state.location != null
 
     Column(
         modifier
@@ -50,6 +50,8 @@ fun ImageScreen(vm: GeneratorViewModel, modifier: Modifier = Modifier) {
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         ClearBar("image", enabled = state.hasInput) { vm.clearWorkspace(ws) }
+
+        LocationSection(vm, ws, state, prompt)
 
         ReferenceAndCharacterSections(vm, ws, state, prompt, noun = "image")
 

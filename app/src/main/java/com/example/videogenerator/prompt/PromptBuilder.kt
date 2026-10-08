@@ -16,6 +16,9 @@ data class PromptInput(
     val nsfw: Boolean,
     val tagStyle: TagStyle,
     val characters: List<Character> = emptyList(),
+    /** A location image is sent after the references. */
+    val hasLocation: Boolean = false,
+    val locationNote: String = "",
 )
 
 data class BuiltPrompt(
@@ -31,22 +34,30 @@ data class BuiltPrompt(
 
 object PromptBuilder {
     const val START_FRAME_TAG = "start"
+    const val LOCATION_TAG = "location"
     private val TAG_REGEX = Regex("@([A-Za-z0-9_]+)")
 
     /**
      * Ofox sends either a first frame (frame_images) or references (input_references),
      * never both. With references present the start frame is sent as reference #1,
      * so numbering here must match the server's ordering in server/src/ofox.js.
+     * The app uploads the location image after the references, so it comes last.
      */
-    fun tagMap(references: List<ReferenceImage>, hasStartFrame: Boolean, style: TagStyle): Map<String, String> {
+    fun tagMap(
+        references: List<ReferenceImage>,
+        hasStartFrame: Boolean,
+        style: TagStyle,
+        hasLocation: Boolean = false,
+    ): Map<String, String> {
         val map = linkedMapOf<String, String>()
-        if (references.isEmpty()) {
+        if (references.isEmpty() && !hasLocation) {
             if (hasStartFrame) map[START_FRAME_TAG] = "the first frame"
             return map
         }
         var n = 1
         if (hasStartFrame) map[START_FRAME_TAG] = imageLabel(n++, style)
         references.forEach { map[it.tag.lowercase()] = imageLabel(n++, style) }
+        if (hasLocation) map[LOCATION_TAG] = imageLabel(n, style)
         return map
     }
 
@@ -100,7 +111,7 @@ object PromptBuilder {
     }
 
     fun build(input: PromptInput): BuiltPrompt {
-        val imageTags = tagMap(input.references, input.hasStartFrame, input.tagStyle)
+        val imageTags = tagMap(input.references, input.hasStartFrame, input.tagStyle, input.hasLocation)
         val characters = input.characters.filter { it.name.isNotBlank() }
         val characterImages = characters.associate { it.tag to characterImageLabels(it, input.references, imageTags) }
         // @Name becomes just the name; the Characters section already ties it to its images.
@@ -122,10 +133,11 @@ object PromptBuilder {
         }
 
         val startLabel = if (input.hasStartFrame) imageTags[START_FRAME_TAG] else null
+        val locationLabel = if (input.hasLocation) imageTags[LOCATION_TAG] else null
 
         // References: one "Image N = …" line each.
         val referenceLines = mutableListOf<String>()
-        if (startLabel != null && input.references.isNotEmpty()) referenceLines += "$startLabel = start frame."
+        if (startLabel != null && (input.references.isNotEmpty() || locationLabel != null)) referenceLines += "$startLabel = start frame."
         input.references.forEach { ref ->
             val label = imageTags.getValue(ref.tag.lowercase())
             val note = resolve(ref.note).trimEnd('.')
@@ -137,12 +149,19 @@ object PromptBuilder {
                 else -> ref.tag
             } + "."
         }
+        locationLabel?.let { referenceLines += "$it = location." }
         if (referenceLines.isNotEmpty()) sections += "References:\n" + referenceLines.joinToString("\n")
 
         if (characters.isNotEmpty()) {
             sections += "Characters:\n" + characters.joinToString("\n") {
                 characterLine(it, characterImages.getValue(it.tag), ::resolve)
             }
+        }
+
+        locationLabel?.let { label ->
+            val note = resolve(input.locationNote).trimEnd('.')
+            sections += "Location: everything happens in the place shown in $label; keep its layout, architecture, " +
+                "landmarks, colours and lighting the same throughout." + if (note.isNotEmpty()) " $note." else ""
         }
 
         val shots = input.shots.filter { it.description.isNotBlank() || it.type != ShotType.NONE }

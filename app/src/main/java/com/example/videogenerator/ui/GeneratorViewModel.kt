@@ -56,6 +56,9 @@ data class CreateState(
     val shots: List<Shot> = listOf(Shot(id = 1)),
     val references: List<ReferenceImage> = emptyList(),
     val startFrame: String? = null,
+    /** Photo of the place everything happens in; uploaded after the references. */
+    val location: String? = null,
+    val locationNote: String = "",
     val characters: List<Character> = emptyList(),
     /** Set after the first images are added, to offer creating a character. */
     val offerCharacter: Boolean = false,
@@ -75,11 +78,11 @@ data class CreateState(
     @Transient val submitting: Boolean = false,
     @Transient val message: String? = null,
 ) {
-    /** Ofox allows 9 input references; a start frame sent alongside them takes one slot. */
-    val maxReferences: Int get() = if (startFrame != null) 8 else 9
+    /** Ofox allows 9 input references; a start frame or location sent alongside them takes a slot each. */
+    val maxReferences: Int get() = 9 - listOfNotNull(startFrame, location).size
     /** Anything typed or added, so Clear can be disabled on an empty form. */
     val hasInput: Boolean get() =
-        scene.isNotBlank() || startFrame != null || references.isNotEmpty() || characters.isNotEmpty() ||
+        scene.isNotBlank() || startFrame != null || location != null || references.isNotEmpty() || characters.isNotEmpty() ||
             shots.any { it.description.isNotBlank() || it.seconds != null }
     val estimatedCostUsd: Double get() = (if (nsfw) resolution.nsfwUsdPerSecond else resolution.usdPerSecond) * duration
 }
@@ -145,6 +148,8 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
                 shots = if (image) emptyList() else s.shots,
                 references = s.references,
                 hasStartFrame = !image && s.startFrame != null,
+                hasLocation = s.location != null,
+                locationNote = s.locationNote,
                 characters = s.characters,
                 durationSeconds = s.duration,
                 instructions = ins.filter { it.enabled }.map { it.text },
@@ -187,7 +192,10 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun CreateState.imageUris() = listOfNotNull(startFrame) + references.map { it.uri }
+    private fun CreateState.imageUris() = listOfNotNull(startFrame, location) + references.map { it.uri }
+
+    /** Every uploaded reference, with the location last to match [PromptBuilder.tagMap]. */
+    private fun CreateState.referenceUris() = (references.map { it.uri } + listOfNotNull(location)).map(Uri::parse)
 
     private fun CreateState.maxId() =
         (references.map { it.id } + characters.map { it.id } + shots.map { it.id }).maxOrNull() ?: 0L
@@ -200,6 +208,7 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
         if (s.startFrame != null && !drafts.exists(s.startFrame!!)) {
             s = s.copy(startFrame = null).withoutCharacterImage(Character.START_FRAME_IMAGE_ID)
         }
+        if (s.location != null && !drafts.exists(s.location!!)) s = s.copy(location = null)
         return s
     }
 
@@ -265,6 +274,24 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
         } else next
     }
 
+    fun setLocation(uri: Uri?, ws: Workspace = Workspace.VIDEO) = viewModelScope.launch {
+        val copy = uri?.let {
+            runCatching { drafts.keep(listOf(it)).single() }.getOrElse { e ->
+                flow(ws).update { s -> s.copy(message = "Couldn't use that photo: ${e.message}") }
+                return@launch
+            }
+        }
+        edit(ws) { s ->
+            val next = s.copy(location = copy?.toString(), locationNote = if (copy == null) "" else s.locationNote)
+            if (next.references.size > next.maxReferences) {
+                val dropped = next.references.drop(next.maxReferences).map { it.id }
+                var trimmed = next.copy(references = next.references.take(next.maxReferences), message = "Removed one reference to make room for the location.")
+                dropped.forEach { trimmed = trimmed.withoutCharacterImage(it) }
+                trimmed
+            } else next
+        }
+    }
+
     // --- Characters -----------------------------------------------------------------
 
     fun dismissCharacterOffer(ws: Workspace = Workspace.VIDEO) = edit(ws) { it.copy(offerCharacter = false) }
@@ -275,7 +302,7 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
     fun saveCharacter(character: Character, toLibrary: Boolean = false, ws: Workspace = Workspace.VIDEO): String? {
         val s = flow(ws).value
         val name = character.name.trim()
-        val taken = s.references.map { it.tag.lowercase() } + PromptBuilder.START_FRAME_TAG +
+        val taken = s.references.map { it.tag.lowercase() } + PromptBuilder.START_FRAME_TAG + PromptBuilder.LOCATION_TAG +
             s.characters.filter { it.id != character.id }.map { it.tag }
         val error = characterError(character, name) ?: if (name.lowercase() in taken) {
             "\"$name\" is already used by another image or character."
@@ -381,7 +408,7 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
             return "${saved.name} needs ${files.size} reference slots but only $free are free. Remove some reference images first."
         }
         val tag = saved.name.lowercase()
-        val taken = (s.references.map { it.tag.lowercase() } + PromptBuilder.START_FRAME_TAG + s.characters.map { it.tag }).toMutableSet()
+        val taken = (s.references.map { it.tag.lowercase() } + PromptBuilder.START_FRAME_TAG + PromptBuilder.LOCATION_TAG + s.characters.map { it.tag }).toMutableSet()
         if (tag in taken) return "Something called @${saved.name} is already added. Rename or remove it first."
         taken += tag
         val refs = files.map { file ->
@@ -473,8 +500,8 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
         val s = _imageState.value
         val cfg = settings.value
         val promptText = imagePrompt.value.text
-        // 4K only exists for prompt-only images; with references the canvas is 2K.
-        val resolution = if (s.references.isEmpty()) s.imageResolution else "2k"
+        // 4K only exists for prompt-only images; with references or a location the canvas is 2K.
+        val resolution = if (s.references.isEmpty() && s.location == null) s.imageResolution else "2k"
         _imageState.update { it.copy(submitting = true, message = null) }
         viewModelScope.launch {
             try {
@@ -489,7 +516,7 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
                         aspectRatio = s.imageAspect,
                         seed = s.seed.toLongOrNull(),
                     ),
-                    references = s.references.map { Uri.parse(it.uri) },
+                    references = s.referenceUris(),
                 )
                 val job = Job(
                     id = task.id,
@@ -516,7 +543,9 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
     private fun commonErrors(s: CreateState, p: BuiltPrompt): String? {
         val tags = s.references.map { it.tag.lowercase() }
         if (tags.any { !it.matches(Regex("[a-z0-9_]+")) }) return "Reference tags may only contain letters, numbers and _."
-        if (tags.size != tags.toSet().size || "start" in tags) return "Each reference needs a unique tag (\"start\" is reserved)."
+        if (tags.size != tags.toSet().size || "start" in tags || "location" in tags) {
+            return "Each reference needs a unique tag (\"start\" and \"location\" are reserved)."
+        }
         s.characters.firstOrNull { it.imageIds.isEmpty() }?.let {
             return "${it.name} has no images left. Edit the character and choose at least one."
         }
@@ -595,7 +624,7 @@ class GeneratorViewModel(app: Application) : AndroidViewModel(app) {
                         seed = s.seed.toLongOrNull(),
                     ),
                     startFrame = s.startFrame?.let(Uri::parse),
-                    references = s.references.map { Uri.parse(it.uri) },
+                    references = s.referenceUris(),
                 )
                 val job = Job(
                     id = task.id,
